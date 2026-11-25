@@ -1,0 +1,1 @@
+../../../../packaging/agent/setup.sh

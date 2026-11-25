@@ -1,0 +1,49 @@
+[package]
+name = "nextpane-agent"
+description = "NextPane host agent: runs Node.js apps, reports metrics, manages the firewall."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+nextpane-proto = { path = "../proto" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+libc = "0.2"
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+tokio = { version = "1", features = ["rt", "macros", "time", "sync"] }
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
+
+[package.metadata.deb]
+name = "nextpane-agent"
+maintainer = "NextPane"
+section = "admin"
+priority = "optional"
+depends = "git, curl, systemd, util-linux"
+maintainer-scripts = "../../packaging/agent/deb"
+conf-files = ["/etc/nextpane/agent.env"]
+assets = [
+  ["target/release/nextpane-agent", "usr/bin/", "755"],
+  ["../../packaging/agent/nextpane-agent.service", "lib/systemd/system/", "644"],
+  ["../../packaging/agent/agent.env", "etc/nextpane/agent.env", "600"],
+  ["../../packaging/agent/setup.sh", "usr/lib/nextpane-agent/setup.sh", "755"],
+]
+
+[package.metadata.generate-rpm]
+name = "nextpane-agent"
+post_install_script = "/usr/lib/nextpane-agent/setup.sh install"
+pre_uninstall_script = "if [ \"$1\" = 0 ]; then /usr/lib/nextpane-agent/setup.sh uninstall; fi"
+assets = [
+  { source = "target/release/nextpane-agent", dest = "/usr/bin/nextpane-agent", mode = "755" },
+  { source = "../../packaging/agent/nextpane-agent.service", dest = "/usr/lib/systemd/system/nextpane-agent.service", mode = "644" },
+  { source = "../../packaging/agent/agent.env", dest = "/etc/nextpane/agent.env", mode = "600", config = "noreplace" },
+  { source = "../../packaging/agent/setup.sh", dest = "/usr/lib/nextpane-agent/setup.sh", mode = "755" },
+]
+[package.metadata.generate-rpm.requires]
+git = "*"
+curl = "*"
+systemd = "*"
+util-linux = "*"

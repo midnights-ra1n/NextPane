@@ -1,0 +1,155 @@
+# Every push to "stable":
+#   1. runs the CI checks (ci.yml),
+#   2. builds static binaries, .deb and .rpm for x86_64 and aarch64,
+#   3. pushes the Docker image ghcr.io/<owner>/nextpane:stable,
+#   4. if the workspace version (root Cargo.toml) has no release yet: creates tag vX.Y.Z, publishes the
+#      GitHub release with latest.json, and tags the image :vX.Y.Z and :latest.
+# Panels and agents update from these releases. To ship a new version: bump the version, merge into stable.
+name: stable
+on:
+  push:
+    branches: [stable]
+  workflow_dispatch:
+
+concurrency:
+  group: stable
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      release: ${{ steps.v.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
+          [ -n "$V" ] || { echo "no version in Cargo.toml"; exit 1; }
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          if gh release view "v$V" >/dev/null 2>&1; then
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::v$V is already released: building only. Bump the version in Cargo.toml to publish a release."
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::v$V will be released"
+          fi
+
+  build:
+    needs: [ci, version]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [x86_64, aarch64]
+    env:
+      TARGET: ${{ matrix.arch }}-unknown-linux-musl
+      V: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ env.TARGET }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.arch }}
+      - name: Tools
+        run: |
+          pip install ziglang==0.13.0
+          cargo install --locked cargo-zigbuild cargo-deb cargo-generate-rpm
+      - name: Build
+        run: cargo zigbuild --release --target "$TARGET" -p nextpane-agent -p nextpane-server
+      - name: Package
+        run: |
+          A="${{ matrix.arch }}"
+          mkdir -p dist
+          for p in agent server; do
+            cargo deb --no-build --target "$TARGET" -p "nextpane-$p" -o "dist/nextpane-$p-$V-$A.deb"
+            cargo generate-rpm --target "$TARGET" -p "crates/$p" -o "dist/nextpane-$p-$V-$A.rpm"
+            cp "target/$TARGET/release/nextpane-$p" "dist/nextpane-$p-$V-$A"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.arch }}
+          path: dist/*
+          retention-days: 14
+
+  publish:
+    needs: [version, build]
+    if: needs.version.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    env:
+      V: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
+      - name: Manifest
+        run: |
+          cp packaging/agent/nextpane-agent.service dist/nextpane-agent.service
+          cp packaging/agent/setup.sh dist/nextpane-agent-setup.sh
+          cd dist
+          {
+            printf '{"version":"%s","files":{' "$V"; sep=""
+            for f in nextpane-*; do printf '%s"%s":"%s"' "$sep" "$f" "$(sha256sum "$f" | cut -d' ' -f1)"; sep=","; done
+            printf '}}\n'
+          } > latest.json
+          cat latest.json
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.V }}
+          target_commitish: ${{ github.sha }}
+          name: NextPane v${{ env.V }}
+          files: dist/*
+          generate_release_notes: true
+          make_latest: true
+
+  docker:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    env:
+      V: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
+      - name: Prepare binaries and tags
+        id: prep
+        run: |
+          mkdir -p bin
+          cp "dist/nextpane-server-$V-x86_64" bin/nextpane-server-amd64
+          cp "dist/nextpane-server-$V-aarch64" bin/nextpane-server-arm64
+          chmod +x bin/*
+          IMG="ghcr.io/${GITHUB_REPOSITORY,,}"
+          TAGS="$IMG:stable"
+          if [ "${{ needs.version.outputs.release }}" = true ]; then TAGS="$TAGS,$IMG:v$V,$IMG:latest"; fi
+          echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packaging/docker/Dockerfile.release
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.prep.outputs.tags }}

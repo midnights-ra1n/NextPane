@@ -1,0 +1,21 @@
+name: ci
+# Every commit on every branch, every pull request. stable.yml reuses it before building a release.
+on:
+  push:
+    branches-ignore: [stable]
+  pull_request:
+  workflow_call:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+      - run: node --check web/app.js
+      - run: for f in packaging/install-agent.sh packaging/*/setup.sh packaging/server/update.sh packaging/*/deb/*; do sh -n "$f"; done

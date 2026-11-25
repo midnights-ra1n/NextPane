@@ -1,0 +1,18 @@
+[Unit]
+Description=NextPane agent
+Documentation=https://github.com/midnights-ra1n/NextPane/tree/stable/docs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Root is required to manage systemd units and the firewall. Apps never run as root:
+# they run as the unprivileged "nextpane" user (see /etc/systemd/system/nextpane-app-*.service).
+EnvironmentFile=/etc/nextpane/agent.env
+ExecStart=/usr/bin/nextpane-agent
+Restart=always
+RestartSec=5
+Nice=5
+CPUWeight=50
+
+[Install]
+WantedBy=multi-user.target

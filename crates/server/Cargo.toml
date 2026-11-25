@@ -1,0 +1,58 @@
+[package]
+name = "nextpane-server"
+description = "NextPane control panel: web UI, API and agent hub."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+nextpane-proto = { path = "../proto" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+axum = { version = "0.8", features = ["ws"] }
+tokio = { version = "1", features = ["full"] }
+futures-util = "0.3"
+rusqlite = { version = "0.32", features = ["bundled"] }
+argon2 = "0.5"
+rand = "0.8"
+aes-gcm = "0.10"
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
+pbkdf2 = "0.12"
+base64 = "0.22"
+ureq = { version = "2", features = ["json"] }
+
+[package.metadata.deb]
+name = "nextpane-server"
+maintainer = "NextPane"
+section = "admin"
+priority = "optional"
+depends = "systemd"
+maintainer-scripts = "../../packaging/server/deb"
+conf-files = ["/etc/nextpane/server.env"]
+assets = [
+  ["target/release/nextpane-server", "usr/bin/", "755"],
+  ["../../packaging/server/nextpane-server.service", "lib/systemd/system/", "644"],
+  ["../../packaging/server/nextpane-server-update.service", "lib/systemd/system/", "644"],
+  ["../../packaging/server/nextpane-server-update.path", "lib/systemd/system/", "644"],
+  ["../../packaging/server/update.sh", "usr/lib/nextpane-server/update.sh", "755"],
+  ["../../packaging/server/setup.sh", "usr/lib/nextpane-server/setup.sh", "755"],
+  ["../../packaging/server/server.env", "etc/nextpane/server.env", "640"],
+]
+
+[package.metadata.generate-rpm]
+name = "nextpane-server"
+post_install_script = "/usr/lib/nextpane-server/setup.sh"
+pre_uninstall_script = "if [ \"$1\" = 0 ]; then systemctl disable --now nextpane-server nextpane-server-update.path || true; fi"
+assets = [
+  { source = "target/release/nextpane-server", dest = "/usr/bin/nextpane-server", mode = "755" },
+  { source = "../../packaging/server/nextpane-server.service", dest = "/usr/lib/systemd/system/nextpane-server.service", mode = "644" },
+  { source = "../../packaging/server/nextpane-server-update.service", dest = "/usr/lib/systemd/system/nextpane-server-update.service", mode = "644" },
+  { source = "../../packaging/server/nextpane-server-update.path", dest = "/usr/lib/systemd/system/nextpane-server-update.path", mode = "644" },
+  { source = "../../packaging/server/update.sh", dest = "/usr/lib/nextpane-server/update.sh", mode = "755" },
+  { source = "../../packaging/server/setup.sh", dest = "/usr/lib/nextpane-server/setup.sh", mode = "755" },
+  { source = "../../packaging/server/server.env", dest = "/etc/nextpane/server.env", mode = "640", config = "noreplace" },
+]

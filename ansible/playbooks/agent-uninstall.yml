@@ -1,0 +1,10 @@
+---
+# Remove the agent. App data in /var/lib/nextpane is always kept.
+#   ansible-playbook -i inventory.ini playbooks/agent-uninstall.yml -e nextpane_keep_user=true
+- name: Remove the NextPane agent
+  hosts: nextpane
+  become: true
+  roles:
+    - role: nextpane_agent
+      vars:
+        nextpane_state: absent

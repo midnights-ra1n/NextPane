@@ -1,0 +1,12 @@
+# Used by the release workflow: packages the static (musl) binaries already built for each arch.
+FROM debian:bookworm-slim
+ARG TARGETARCH
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd --system --home-dir /data nextpane && mkdir /data && chown nextpane:nextpane /data
+COPY bin/nextpane-server-${TARGETARCH} /usr/bin/nextpane-server
+ENV NEXTPANE_DATA=/data NEXTPANE_LISTEN=0.0.0.0:3000 NEXTPANE_INSTALL=docker
+VOLUME /data
+EXPOSE 3000
+USER nextpane
+ENTRYPOINT ["/usr/bin/nextpane-server"]

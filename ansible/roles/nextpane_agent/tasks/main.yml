@@ -1,0 +1,16 @@
+---
+- name: Check required variables
+  ansible.builtin.assert:
+    that:
+      - nextpane_server_url is match('^wss?://')
+      - nextpane_release_url | length > 0
+    fail_msg: "Set nextpane_server_url (wss://<panel>/agent/ws) and nextpane_release_url."
+  when: nextpane_state == 'present'
+
+- name: Install the agent
+  ansible.builtin.include_tasks: install.yml
+  when: nextpane_state == 'present'
+
+- name: Uninstall the agent
+  ansible.builtin.include_tasks: uninstall.yml
+  when: nextpane_state == 'absent'

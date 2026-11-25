@@ -1,0 +1,21 @@
+[Unit]
+Description=NextPane server
+Documentation=https://github.com/midnights-ra1n/NextPane/tree/stable/docs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=nextpane-server
+Group=nextpane-server
+EnvironmentFile=/etc/nextpane/server.env
+ExecStart=/usr/bin/nextpane-server
+Restart=always
+RestartSec=2
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/nextpane-server
+
+[Install]
+WantedBy=multi-user.target

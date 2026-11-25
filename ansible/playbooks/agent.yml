@@ -1,0 +1,9 @@
+---
+# Install or upgrade the agent on every host of the "nextpane" group, 20 hosts at a time.
+#   ansible-playbook -i inventory.ini playbooks/agent.yml --ask-vault-pass
+- name: NextPane agent
+  hosts: nextpane
+  become: true
+  serial: 20
+  roles:
+    - nextpane_agent

@@ -1,0 +1,6 @@
+#!/bin/sh
+set -e
+if [ "$1" = configure ]; then
+  /usr/lib/nextpane-server/setup.sh
+fi
+exit 0

@@ -1,0 +1,99 @@
+---
+- name: Resolve the latest release
+  ansible.builtin.uri:
+    url: "{{ nextpane_release_url }}/latest/download/latest.json"
+    return_content: true
+  register: _np_latest
+  when: nextpane_version == 'latest'
+
+- name: Set release facts
+  ansible.builtin.set_fact:
+    _np_version: "{{ _np_latest.json.version if nextpane_version == 'latest' else nextpane_version }}"
+    _np_arch: "{{ 'aarch64' if ansible_architecture in ['aarch64', 'arm64'] else 'x86_64' }}"
+    _np_method: >-
+      {{ 'binary' if nextpane_install_method == 'binary'
+         else 'deb' if ansible_os_family == 'Debian'
+         else 'rpm' if ansible_os_family == 'RedHat'
+         else 'binary' }}
+
+- name: Read the release manifest (checksums)
+  ansible.builtin.uri:
+    url: "{{ nextpane_release_url }}/download/v{{ _np_version }}/latest.json"
+    return_content: true
+  register: _np_manifest
+
+- name: Set asset name
+  ansible.builtin.set_fact:
+    _np_asset: "nextpane-agent-{{ _np_version }}-{{ _np_arch }}{{ '' if _np_method == 'binary' else '.' ~ _np_method }}"
+
+- name: Install git (needed to fetch apps)
+  ansible.builtin.package:
+    name: git
+    state: present
+
+- name: Create /etc/nextpane
+  ansible.builtin.file:
+    path: /etc/nextpane
+    state: directory
+    mode: "0755"
+
+- name: Write agent configuration
+  ansible.builtin.template:
+    src: agent.env.j2
+    dest: /etc/nextpane/agent.env
+    owner: root
+    group: root
+    mode: "0600"
+  notify: Restart nextpane-agent
+
+- name: Download {{ _np_asset }}
+  ansible.builtin.get_url:
+    url: "{{ nextpane_release_url }}/download/v{{ _np_version }}/{{ _np_asset }}"
+    dest: "/var/tmp/{{ _np_asset }}"
+    checksum: "sha256:{{ _np_manifest.json.files[_np_asset] }}"
+    mode: "0644"
+
+- name: Install the deb package
+  ansible.builtin.apt:
+    deb: "/var/tmp/{{ _np_asset }}"
+    dpkg_options: force-confold
+  when: _np_method == 'deb'
+
+- name: Install the rpm package
+  ansible.builtin.dnf:
+    name: "/var/tmp/{{ _np_asset }}"
+    disable_gpg_check: true
+    state: present
+  when: _np_method == 'rpm'
+
+- name: Install the static binary
+  when: _np_method == 'binary'
+  block:
+    - name: Binary
+      ansible.builtin.copy:
+        src: "/var/tmp/{{ _np_asset }}"
+        dest: /usr/bin/nextpane-agent
+        remote_src: true
+        mode: "0755"
+      notify: Restart nextpane-agent
+    - name: Setup script
+      ansible.builtin.copy:
+        src: setup.sh
+        dest: /usr/lib/nextpane-agent/setup.sh
+        mode: "0755"
+    - name: systemd unit
+      ansible.builtin.copy:
+        src: nextpane-agent.service
+        dest: /etc/systemd/system/nextpane-agent.service
+        mode: "0644"
+    - name: Create user and directories
+      ansible.builtin.command: /usr/lib/nextpane-agent/setup.sh install
+      args:
+        creates: /var/lib/nextpane-agent
+
+- name: Enable and start the agent
+  ansible.builtin.systemd_service:
+    name: nextpane-agent
+    enabled: true
+    state: started
+    daemon_reload: true

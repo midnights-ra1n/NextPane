@@ -1,0 +1,23 @@
+# NextPane behind Caddy (automatic HTTPS). Set PANEL_DOMAIN, point its DNS here, then: docker compose up -d
+# First start: docker compose logs nextpane | grep "setup code"
+services:
+  nextpane:
+    image: ghcr.io/midnights-ra1n/nextpane:latest
+    build: .
+    restart: unless-stopped
+    environment:
+      NEXTPANE_RELEASE_URL: ${NEXTPANE_RELEASE_URL:-}
+    volumes:
+      - nextpane-data:/data
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    command: caddy reverse-proxy --from ${PANEL_DOMAIN:?set PANEL_DOMAIN} --to nextpane:3000
+    volumes:
+      - caddy-data:/data
+
+volumes:
+  nextpane-data:
+  caddy-data:

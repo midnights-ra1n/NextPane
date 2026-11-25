@@ -1,0 +1,22 @@
+---
+# present: install/upgrade and configure the agent. absent: uninstall it.
+nextpane_state: present
+
+# WebSocket URL of the panel.
+nextpane_server_url: ""            # e.g. wss://panel.example.com/agent/ws
+# Enrollment key created in the panel (Settings > Enrollment keys). Keep it in Ansible Vault.
+nextpane_enroll_token: ""
+# Where releases are published.
+nextpane_release_url: ""           # e.g. https://github.com/midnights-ra1n/NextPane/releases
+# "latest" or an exact version such as "0.2.0".
+nextpane_version: latest
+# auto: deb on Debian/Ubuntu, rpm on RHEL/Alma/Rocky/Fedora, static binary elsewhere. Or: package | binary
+nextpane_install_method: auto
+
+# Optional agent settings (see /etc/nextpane/agent.env).
+nextpane_firewall: ""              # ufw | firewalld | nftables | iptables | none (empty = auto-detect)
+nextpane_path: ""                  # PATH for builds and apps
+
+# On uninstall: keep the "nextpane" user (its apps keep running) instead of deleting it.
+# App data in /var/lib/nextpane is kept either way.
+nextpane_keep_user: false

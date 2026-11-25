@@ -1,0 +1,8 @@
+[Unit]
+Description=Watch for NextPane server updates downloaded by the panel
+
+[Path]
+PathExists=/var/lib/nextpane-server/update/pending
+
+[Install]
+WantedBy=multi-user.target

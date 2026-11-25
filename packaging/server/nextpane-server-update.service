@@ -1,0 +1,6 @@
+[Unit]
+Description=Install a NextPane server update
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/nextpane-server/update.sh

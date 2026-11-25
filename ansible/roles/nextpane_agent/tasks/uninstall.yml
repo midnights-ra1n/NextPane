@@ -1,0 +1,34 @@
+---
+- name: Choose what happens to the "nextpane" user
+  ansible.builtin.file:
+    path: /etc/nextpane/keep-user
+    state: "{{ 'touch' if nextpane_keep_user else 'absent' }}"
+    mode: "0644"
+
+- name: Check installed packages
+  ansible.builtin.package_facts:
+
+- name: Remove the package
+  ansible.builtin.package:
+    name: nextpane-agent
+    state: absent
+  when: "'nextpane-agent' in ansible_facts.packages"
+
+- name: Remove a binary install
+  when: "'nextpane-agent' not in ansible_facts.packages"
+  block:
+    - name: Run uninstall steps
+      ansible.builtin.command: /usr/lib/nextpane-agent/setup.sh uninstall
+      args:
+        removes: /usr/lib/nextpane-agent/setup.sh
+    - name: Remove files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /usr/bin/nextpane-agent
+        - /etc/systemd/system/nextpane-agent.service
+        - /usr/lib/nextpane-agent
+    - name: Reload systemd
+      ansible.builtin.systemd_service:
+        daemon_reload: true
