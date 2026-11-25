@@ -1,6 +1,6 @@
 //! REST API used by the web UI. Every handler except `webhook` requires a session (`User`).
 
-use crate::{auth::{verify_password, User}, bad, crypto, db::audit, hub, now, ApiErr, St};
+use crate::{auth::{verify_password, User}, bad, crypto, db::audit, hub, notify, now, ApiErr, St};
 use axum::{
     body::Bytes,
     extract::{Path, Query, State},
@@ -19,12 +19,12 @@ fn ok() -> R {
     Ok(Json(json!({ "ok": true })))
 }
 
-fn host_of_app(st: &St, app_id: i64) -> Result<(i64, AppSpec), ApiErr> {
+pub(crate) fn host_of_app(st: &St, app_id: i64) -> Result<(i64, AppSpec), ApiErr> {
     let (h, s): (i64, String) = st.db.lock().unwrap().query_row("SELECT host_id, spec FROM apps WHERE id=?1", [app_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
     Ok((h, serde_json::from_str(&s).map_err(|e| bad(e.to_string()))?))
 }
 
-fn load_env(st: &St, app_id: i64) -> Result<Vec<EnvVar>, ApiErr> {
+pub(crate) fn load_env(st: &St, app_id: i64) -> Result<Vec<EnvVar>, ApiErr> {
     let db = st.db.lock().unwrap();
     let mut q = db.prepare("SELECT key, value FROM env WHERE app_id=?1 ORDER BY key")?;
     let rows = q.query_map([app_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
@@ -214,7 +214,13 @@ pub async fn app(State(st): State<St>, _: User, Path(id): Path<i64>) -> R {
     let host = v["host_id"].as_i64().unwrap_or(0);
     drop(db);
     v["online"] = st.live.lock().unwrap().contains_key(&host).into();
-    v["metrics"] = json!(st.history.lock().unwrap().get(&host).and_then(|q| q.back().and_then(|m| m.apps.iter().find(|a| Some(a.name.as_str()) == v["spec"]["name"].as_str()).cloned())));
+    let has_token = crate::discord::has_token_var(&st, id); // before taking the history lock
+    let name = v["spec"]["name"].as_str().unwrap_or_default().to_string();
+    let hist = st.history.lock().unwrap();
+    let q = hist.get(&host);
+    v["metrics"] = json!(q.and_then(|q| q.back()).and_then(|m| m.apps.iter().find(|a| a.name == name).cloned()));
+    v["discord"] = json!(has_token || v["metrics"]["discord_js"].is_string());
+    v["history"] = json!(q.map(|q| q.iter().filter_map(|m| m.apps.iter().find(|a| a.name == name).map(|a| json!({ "ts": m.ts, "cpu": a.cpu, "mem": a.mem }))).collect::<Vec<_>>()).unwrap_or_default());
     Ok(Json(v))
 }
 
@@ -285,17 +291,23 @@ pub fn start_deploy(st: &St, app_id: i64, sha: Option<String>, trigger: &str) ->
         dep
     };
     let st = st.clone();
+    let (name, trigger) = (spec.name.clone(), trigger.to_string());
     tokio::spawn(async move {
         let r = hub::command(&st, host, Command::Deploy { app: spec, env, sha }, Duration::from_secs(3600)).await;
         let (status, log, sha) = match r {
             Ok(r) => (if r.ok { "success" } else { "failed" }, r.output, r.data),
             Err(e) => ("failed", e.1, None),
         };
-        let db = st.db.lock().unwrap();
-        db.execute("UPDATE deployments SET status=?1, log=?2, finished=?3, sha=COALESCE(?4, sha) WHERE id=?5", params![status, log, now(), sha, dep]).ok();
-        if let Some(s) = sha {
-            db.execute("UPDATE apps SET last_sha=?1 WHERE id=?2", params![s, app_id]).ok();
+        {
+            let db = st.db.lock().unwrap();
+            db.execute("UPDATE deployments SET status=?1, log=?2, finished=?3, sha=COALESCE(?4, sha) WHERE id=?5", params![status, log, now(), sha, dep]).ok();
+            if let Some(s) = &sha {
+                db.execute("UPDATE apps SET last_sha=?1 WHERE id=?2", params![s, app_id]).ok();
+            }
         }
+        let at = sha.as_deref().map(|s| format!(" at {}", &s[..s.len().min(7)])).unwrap_or_default();
+        let msg = format!("NextPane: deployment of {name} on {} {}{at} ({trigger})", notify::host_name(&st, host), if status == "success" { "succeeded" } else { "FAILED" });
+        notify::send(&st, if status == "success" { "deploy_success" } else { "deploy_failed" }, msg);
     });
     Ok(dep)
 }
@@ -383,6 +395,56 @@ pub async fn deployment(State(st): State<St>, _: User, Path(id): Path<i64>) -> R
                    "log": r.get::<_, String>(4)?, "started": r.get::<_, i64>(5)?, "finished": r.get::<_, Option<i64>>(6)? }))
     })?;
     Ok(Json(v))
+}
+
+/// Every app of every host, with live status, for the Apps page and the command palette.
+pub async fn all_apps(State(st): State<St>, _: User) -> R {
+    type Row = (i64, i64, String, String, Option<String>, Option<String>, Option<i64>);
+    let rows: Vec<Row> = {
+        let db = st.db.lock().unwrap();
+        let mut q = db.prepare(
+            "SELECT a.id, a.host_id, h.name, a.spec, a.last_sha, d.status, d.started FROM apps a JOIN hosts h ON h.id=a.host_id
+             LEFT JOIN deployments d ON d.id = (SELECT MAX(id) FROM deployments WHERE app_id=a.id) ORDER BY a.name, h.name",
+        )?;
+        let rows = q.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)))?.collect::<Result<_, _>>()?;
+        rows
+    };
+    let live = st.live.lock().unwrap();
+    let hist = st.history.lock().unwrap();
+    let apps: Vec<Value> = rows
+        .into_iter()
+        .map(|(id, host_id, host_name, spec, sha, status, started)| {
+            let spec: Value = serde_json::from_str(&spec).unwrap_or_default();
+            let online = live.contains_key(&host_id);
+            let metrics = hist.get(&host_id).and_then(|q| q.back()).filter(|_| online).and_then(|m| m.apps.iter().find(|a| Some(a.name.as_str()) == spec["name"].as_str()).cloned());
+            json!({ "id": id, "host_id": host_id, "host_name": host_name, "online": online, "spec": spec, "last_sha": sha, "last_status": status, "last_deploy": started, "metrics": metrics })
+        })
+        .collect();
+    Ok(Json(json!({ "apps": apps })))
+}
+
+#[derive(Deserialize)]
+pub struct DeploymentsQuery {
+    limit: Option<u32>,
+    status: Option<String>,
+}
+
+/// Recent deployments across all apps.
+pub async fn deployments(State(st): State<St>, _: User, Query(q): Query<DeploymentsQuery>) -> R {
+    let db = st.db.lock().unwrap();
+    let rows: Vec<Value> = db
+        .prepare(
+            "SELECT d.id, d.app_id, a.name, h.id, h.name, d.sha, d.trigger, d.status, d.started, d.finished
+             FROM deployments d JOIN apps a ON a.id=d.app_id JOIN hosts h ON h.id=a.host_id
+             WHERE (?1 IS NULL OR d.status=?1) ORDER BY d.id DESC LIMIT ?2",
+        )?
+        .query_map(params![q.status.filter(|s| !s.is_empty()), q.limit.unwrap_or(50).min(500)], |r| {
+            Ok(json!({ "id": r.get::<_, i64>(0)?, "app_id": r.get::<_, i64>(1)?, "app": r.get::<_, String>(2)?, "host_id": r.get::<_, i64>(3)?,
+                       "host": r.get::<_, String>(4)?, "sha": r.get::<_, Option<String>>(5)?, "trigger": r.get::<_, String>(6)?,
+                       "status": r.get::<_, String>(7)?, "started": r.get::<_, i64>(8)?, "finished": r.get::<_, Option<i64>>(9)? }))
+        })?
+        .collect::<Result<_, _>>()?;
+    Ok(Json(json!({ "deployments": rows })))
 }
 
 // ---------- environment ----------

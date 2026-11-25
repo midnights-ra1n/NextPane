@@ -36,3 +36,26 @@ When an app has a CPU or memory limit, its page shows usage against the limit; t
 History is in memory only: it is empty after a panel restart and fills up again within minutes. For
 long-term retention, scrape the hosts with a dedicated tool (Prometheus node_exporter, Netdata…);
 NextPane focuses on the live picture.
+
+## Alerts and notifications
+
+The **Overview** page lists what needs attention: offline hosts, failed deployments, stopped apps,
+disks above 85 %, hosts above 90 % memory, apps above 90 % of their memory limit and outdated agents.
+
+To be told without opening the panel, set a webhook in **Settings → Notifications**:
+
+| Format | Body sent |
+|---|---|
+| Slack / Mattermost | `{"text": "…"}` (incoming webhook) |
+| Discord | `{"content": "…"}` |
+| Matrix | `m.text` message sent to a room with the Client-Server API |
+| Generic JSON | `{"event": "deploy_failed", "message": "…", "ts": 1700000000}` |
+
+Events: `deploy_failed`, `deploy_success`, `host_offline` (sent after one minute without the agent, so
+agent restarts and updates stay quiet) and `host_online` (only after an offline notification). The URL
+is stored encrypted, and **Send test** checks it before you save.
+
+**Matrix:** set the homeserver URL (e.g. `https://matrix.org`), the room ID (`!abc:example.org`, in
+Room settings → Advanced, aliases like `#room:server` are not accepted) and the access token of the
+account that posts. Invite that account to the room first. The token is write-only: the panel never
+sends it back to the browser.

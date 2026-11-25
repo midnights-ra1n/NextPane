@@ -91,6 +91,9 @@ pub struct AppMetrics {
     pub cpu: f32,
     pub mem: u64,
     pub disk: u64,
+    /// discord.js version found in the deployed release (the app is a Discord bot).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discord_js: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]

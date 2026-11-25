@@ -1,6 +1,6 @@
 //! Agent WebSocket: enrollment, metrics intake, command round-trips.
 
-use crate::{api, crypto, db::audit, now, ApiErr, CmdResult, Live, St};
+use crate::{api, crypto, db::audit, notify, now, ApiErr, CmdResult, Live, St};
 use axum::{
     extract::{ws::{Message, WebSocket, WebSocketUpgrade}, State},
     http::{HeaderMap, StatusCode},
@@ -100,6 +100,9 @@ async fn session(st: St, host_id: i64, welcome: Option<String>, sock: WebSocket)
         db.execute("UPDATE hosts SET name=?1 WHERE id=?2 AND name LIKE 'host-%'", params![info.hostname, host_id]).ok();
     }
     st.live.lock().unwrap().insert(host_id, Live { tx, info, conn });
+    if st.offline_notified.lock().unwrap().remove(&host_id) {
+        notify::send(&st, "host_online", format!("NextPane: {} is back online", notify::host_name(&st, host_id)));
+    }
 
     let writer = tokio::spawn(async move {
         while let Some(m) = rx.recv().await {
@@ -143,11 +146,25 @@ async fn session(st: St, host_id: i64, welcome: Option<String>, sock: WebSocket)
         }
     }
     writer.abort();
-    let mut live = st.live.lock().unwrap();
-    if live.get(&host_id).is_some_and(|l| l.conn == conn) {
-        live.remove(&host_id);
-    }
+    let ours = {
+        let mut live = st.live.lock().unwrap();
+        let ours = live.get(&host_id).is_some_and(|l| l.conn == conn);
+        if ours {
+            live.remove(&host_id);
+        }
+        ours
+    };
     st.db.lock().unwrap().execute("UPDATE hosts SET last_seen=?1 WHERE id=?2", params![now(), host_id]).ok();
+    // Grace period: agent restarts and updates reconnect within seconds and should not page anyone.
+    if ours {
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            let gone = !st.live.lock().unwrap().contains_key(&host_id);
+            if gone && st.db.lock().unwrap().query_row("SELECT 1 FROM hosts WHERE id=?1", [host_id], |_| Ok(())).is_ok() && st.offline_notified.lock().unwrap().insert(host_id) {
+                notify::send(&st, "host_offline", format!("NextPane: {} is OFFLINE (no agent connection for 1 minute)", notify::host_name(&st, host_id)));
+            }
+        });
+    }
 }
 
 /// Send a command and wait for the agent's answer.

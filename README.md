@@ -27,6 +27,10 @@ gives you a black, quiet dashboard to see what each app costs the host.
 | **Environment variables** | Encrypted at rest, editable in the UI, bulk import from `.env`, export protected by password re-entry and optionally encrypted (OpenSSL-compatible). |
 | **SSH keys** | Manage `authorized_keys` of the dedicated `nextpane` user on each host. |
 | **Firewall** | Per-app inbound rules on **ufw, firewalld, nftables or iptables**, auto-detected, cleaned up with the app. |
+| **Dashboard** | Sidebar UI with a fleet overview, a "needs attention" panel (offline hosts, failed deploys, full disks, apps near their memory limit, outdated agents), all apps and all deployments across hosts, a <kbd>⌘K</kbd> command palette and the audit log. |
+| **Rollbacks & copies** | Redeploy any previous commit in one click; duplicate an app (settings, firewall rules, env) to another host. |
+| **Discord bots** | discord.js bots are detected automatically: bot identity, status and diagnostics from the logs (invalid token, missing intents…), servers (leave), global slash commands (delete), invite link builder. |
+| **Notifications** | Slack, Discord, Mattermost, Matrix or generic JSON webhook on failed/succeeded deployments and hosts going offline or coming back. |
 | **Cache** | One-click cache clear (e.g. `.next/cache`) followed by a restart. |
 | **Updates from the UI** | Update the server (deb/rpm/binary) and every agent from the web UI, checksum-verified. |
 | **Packaging** | Server: Docker image, `.deb`, `.rpm`. Agent: `.deb`, `.rpm`, static binary, one-line installer, **Ansible role**. |

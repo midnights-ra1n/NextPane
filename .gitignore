@@ -1,3 +1,5 @@
 /target
 /dist
 *.db
+/dev/.demo-data
+/dev/.demo.log

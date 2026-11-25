@@ -131,3 +131,30 @@ contain `..`.
 *Settings › Delete app* stops and disables the unit, removes it, closes its firewall rules and deletes
 its env file and folder on the host. If the host is offline you can still remove it from the panel;
 files then stay on the host.
+
+## Discord bots (discord.js)
+
+A Discord bot is an app without a port. In **New app**, pick the type *Discord bot*: the port and
+cache paths are cleared and the start command defaults to `node index.js`.
+
+1. Put the bot token in the **Environment** tab as `DISCORD_TOKEN` (`DISCORD_BOT_TOKEN`, `BOT_TOKEN`
+   and `TOKEN` are also read, in that order). It is encrypted at rest like every variable.
+2. Deploy. After the deployment the agent finds `node_modules/discord.js` in the release, the app gets
+   a *Discord bot* badge and a **Discord** tab.
+
+The Discord tab shows:
+
+- the bot identity, its status (process running, token accepted by Discord, no fatal error in the
+  logs) and the discord.js version;
+- **diagnostics**: Discord API answers plus known discord.js errors found in the last 300 log lines
+  (invalid token, disallowed intents, missing module, missing permissions or access, late interaction
+  replies, DNS problems), each with the fix;
+- the privileged intents enabled in the Developer Portal;
+- an **invite link** builder (no permissions, common permissions or administrator);
+- the **servers** the bot is in, with a *Leave* action;
+- the **global slash commands**, with a *Delete* action for stale ones. Guild-scoped commands are not
+  listed.
+
+The panel calls `discord.com` itself with the token, so the token never reaches the browser. Leaving a
+server and deleting a command are recorded in the activity log. The panel needs outbound HTTPS to
+`discord.com`, and the browser loads avatars from `cdn.discordapp.com`.

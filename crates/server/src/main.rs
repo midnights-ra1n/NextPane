@@ -4,7 +4,9 @@ mod api;
 mod auth;
 mod crypto;
 mod db;
+mod discord;
 mod hub;
+mod notify;
 mod update;
 
 use axum::{
@@ -61,6 +63,8 @@ pub struct Ctx {
     pub manifest: Mutex<Option<(Instant, update::Manifest)>>,
     /// One-time code required to create the first admin, printed in the logs.
     pub setup_code: Mutex<Option<String>>,
+    /// Hosts we sent a "host_offline" notification for (so we announce when they come back).
+    pub offline_notified: Mutex<std::collections::HashSet<i64>>,
 }
 pub type St = Arc<Ctx>;
 
@@ -143,6 +147,7 @@ async fn main() {
         next_id: AtomicU64::new(1),
         manifest: Default::default(),
         setup_code: Mutex::new(setup_code),
+        offline_notified: Default::default(),
     });
 
     let app = Router::new()
@@ -157,6 +162,10 @@ async fn main() {
         .route("/api/hosts/{id}/ssh-keys", post(api::add_ssh_key))
         .route("/api/hosts/{id}/ssh-keys/{kid}", delete(api::delete_ssh_key))
         .route("/api/hosts/{id}/apps", post(api::create_app))
+        .route("/api/apps", get(api::all_apps))
+        .route("/api/deployments", get(api::deployments))
+        .route("/api/settings", get(notify::get_settings).put(notify::put_settings))
+        .route("/api/settings/test", post(notify::test))
         .route("/api/apps/{id}", get(api::app).put(api::update_app).delete(api::delete_app))
         .route("/api/apps/{id}/deploy", post(api::deploy))
         .route("/api/apps/{id}/action", post(api::action))
@@ -165,6 +174,9 @@ async fn main() {
         .route("/api/apps/{id}/deploy-key", post(api::deploy_key))
         .route("/api/apps/{id}/env", get(api::get_env).put(api::put_env))
         .route("/api/apps/{id}/env/export", post(api::export_env))
+        .route("/api/apps/{id}/discord", get(discord::info))
+        .route("/api/apps/{id}/discord/commands/{cmd}", delete(discord::delete_command))
+        .route("/api/apps/{id}/discord/guilds/{guild}", delete(discord::leave_guild))
         .route("/api/deployments/{id}", get(api::deployment))
         .route("/api/enroll-keys", get(api::enroll_keys).post(api::create_enroll_key))
         .route("/api/enroll-keys/{id}", delete(api::delete_enroll_key))
@@ -203,7 +215,7 @@ async fn static_file(uri: axum::http::Uri) -> Response {
     let mut h = HeaderMap::new();
     h.insert(header::CONTENT_TYPE, HeaderValue::from_str(mime).unwrap());
     h.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
-    h.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("default-src 'self'; img-src 'self' data:; frame-ancestors 'none'"));
+    h.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("default-src 'self'; img-src 'self' data: https://cdn.discordapp.com; frame-ancestors 'none'"));
     h.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
     (h, body).into_response()
 }

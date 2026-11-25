@@ -102,10 +102,27 @@ impl Collector {
                 cpu,
                 mem: read(&format!("{cg}/memory.current")).trim().parse().unwrap_or(0),
                 disk: disk.get(name).copied().unwrap_or(0),
+                discord_js: discord_js(name),
             });
         }
         m
     }
+}
+
+/// Version of discord.js installed in the current release, if any.
+fn discord_js(app: &str) -> Option<String> {
+    use std::io::Read;
+    let p = crate::apps::app_dir(app).join("current/node_modules/discord.js/package.json");
+    // The file is owned by the app user: read at most 64 KB and only report a version-shaped string.
+    let mut s = String::new();
+    fs::File::open(p).ok()?.take(64 * 1024).read_to_string(&mut s).ok()?;
+    parse_version(&s)
+}
+
+fn parse_version(pkg: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(pkg).ok()?;
+    let v = v["version"].as_str()?;
+    (!v.is_empty() && v.len() <= 32 && v.chars().all(|c| c.is_ascii_alphanumeric() || ".-+".contains(c))).then(|| v.to_string())
 }
 
 pub fn dir_size(p: &Path) -> u64 {
@@ -124,6 +141,13 @@ pub fn refresh_disk(apps: &[String], map: &Mutex<HashMap<String, u64>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discord_version() {
+        assert_eq!(parse_version(r#"{"name":"discord.js","version":"14.16.3"}"#).as_deref(), Some("14.16.3"));
+        assert_eq!(parse_version(r#"{"version":"1.0 $(rm -rf /)"}"#), None);
+        assert_eq!(parse_version("root:x:0:0"), None);
+    }
 
     #[test]
     fn parsers() {
