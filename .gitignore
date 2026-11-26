@@ -3,3 +3,4 @@
 *.db
 /dev/.demo-data
 /dev/.demo.log
+.DS_Store
