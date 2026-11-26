@@ -1,37 +1,24 @@
-# NextPane panel. Settings come from the shell or a .env file next to this file.
-#
-#   Panel on port 3000 (plain HTTP, put your own reverse proxy in front for HTTPS):
-#     docker compose up -d
-#   Panel on port 3000 with its own HTTPS, reached by IP, no proxy at all:
-#     NEXTPANE_TLS=on docker compose up -d
-#   Panel + bundled Caddy (automatic HTTPS, needs ports 80/443 and PANEL_DOMAIN pointing here):
-#     PANEL_DOMAIN=panel.example.com NEXTPANE_PORT=127.0.0.1:3000 docker compose --profile caddy up -d
-#
+# NextPane panel. Edit the values below, then: docker compose up -d
 # First start: docker compose logs nextpane | grep "setup code"
 services:
   nextpane:
     image: ghcr.io/midnights-ra1n/nextpane:latest
-    build: .
     restart: unless-stopped
-    environment:
-      NEXTPANE_RELEASE_URL: ${NEXTPANE_RELEASE_URL:-}
-      # "on" = HTTPS on port 3000 without any proxy (self-signed certificate, pinned by agents)
-      NEXTPANE_TLS: ${NEXTPANE_TLS:-}
     ports:
-      # "3000" = every interface, "127.0.0.1:3000" = only a proxy on this host can reach it
-      - "${NEXTPANE_PORT:-3000}:3000"
+      - "3000:3000"   # "127.0.0.1:3000:3000" when a reverse proxy runs on this host
+    environment:
+      NEXTPANE_TLS: "off"   # "on" = HTTPS on port 3000 without a reverse proxy (self-signed)
+      NEXTPANE_RELEASE_URL: https://github.com/midnights-ra1n/NextPane/releases
     volumes:
       - nextpane-data:/data
 
+  # Optional reverse proxy with automatic HTTPS: docker compose --profile caddy up -d
   caddy:
     image: caddy:2
     profiles: [caddy]
     restart: unless-stopped
     ports: ["80:80", "443:443"]
-    environment:
-      PANEL_DOMAIN: ${PANEL_DOMAIN:-}
-    # checked inside the container so that `docker compose up` without the profile needs no domain
-    command: ["sh", "-c", "exec caddy reverse-proxy --from \"$${PANEL_DOMAIN:?set PANEL_DOMAIN}\" --to nextpane:3000"]
+    command: caddy reverse-proxy --from panel.example.com --to nextpane:3000
     volumes:
       - caddy-data:/data
 

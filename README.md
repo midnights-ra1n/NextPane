@@ -60,12 +60,9 @@ flowchart LR
 **1. Run the panel** (Docker Compose):
 
 ```sh
-git clone https://github.com/midnights-ra1n/NextPane && cd NextPane
-docker compose up -d                       # panel on http://<host>:3000, behind your own reverse proxy
-# or, no proxy at all, HTTPS on https://<ip>:3000 (self-signed certificate pinned by the agents):
-# NEXTPANE_TLS=on docker compose up -d
-# or, with the bundled Caddy and automatic HTTPS:
-# PANEL_DOMAIN=panel.example.com NEXTPANE_PORT=127.0.0.1:3000 docker compose --profile caddy up -d
+mkdir nextpane && cd nextpane
+curl -fLO https://raw.githubusercontent.com/midnights-ra1n/NextPane/main/docker-compose.yml
+docker compose up -d     # panel on port 3000; edit the file for HTTPS without a proxy or the bundled Caddy
 docker compose logs nextpane | grep "setup code"
 ```
 
