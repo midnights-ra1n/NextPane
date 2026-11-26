@@ -67,7 +67,8 @@ function toast(msg, err = false) {
 
 /** Run an async action from a button: disables it, toasts the result. */
 async function act(btn, fn, okMsg) {
-  if (btn) btn.disabled = true;
+  const busy = (on) => { if (btn) { btn.disabled = on; btn.classList.toggle('busy', on); btn.toggleAttribute('aria-busy', on); } };
+  busy(true);
   try {
     const r = await fn();
     if (okMsg) toast(typeof okMsg === 'function' ? okMsg(r) : okMsg);
@@ -75,7 +76,7 @@ async function act(btn, fn, okMsg) {
   } catch (e) {
     if (!e.auth) toast(e.message, true);
   } finally {
-    if (btn) btn.disabled = false;
+    busy(false);
   }
 }
 
@@ -120,6 +121,10 @@ function copyBtn(text) {
   } }, 'Copy');
   return b;
 }
+const appLink = (ip, port) => {
+  const url = `http://${ip.includes(':') ? `[${ip}]` : ip}:${port}`;
+  return h('a', { class: 'mono', href: url, target: '_blank', rel: 'noopener' }, url);
+};
 const code = (text) => h('div', { class: 'code' }, text, copyBtn(text));
 
 function field(label, input, hint) {
@@ -237,7 +242,9 @@ function markNav() {
 }
 
 /** Page frame: breadcrumbs, title, subtitle, actions, then content. */
+let pageSpin;
 function page({ crumbs = [], title, sub, actions }, ...content) {
+  clearTimeout(pageSpin);
   ensureLayout();
   markNav();
   document.body.classList.remove('side-open');
@@ -533,7 +540,7 @@ function appsTable(apps, { showHost = false } = {}) {
       const [cls, label] = appStatus(a);
       const lim = a.spec.memory_mb ? ` / ${a.spec.memory_mb} MB` : '';
       return h('tr', { class: 'link', onclick: () => (location.hash = `#/apps/${a.id}`) },
-        h('td', {}, h('div', { class: 'row nowrap' }, h('a', { href: `#/apps/${a.id}` }, h('strong', {}, a.spec.name)), a.spec.port && h('span', { class: 'dim mono small' }, `:${a.spec.port}`), m?.discord_js && h('span', { class: 'badge discord', title: `discord.js ${m.discord_js}` }, 'Discord bot'))),
+        h('td', {}, h('div', { class: 'row nowrap' }, h('a', { href: `#/apps/${a.id}` }, h('strong', {}, a.spec.name)), a.spec.port && h('span', { class: 'dim mono small' }, `:${a.spec.port}`), m?.discord_js ? h('span', { class: 'badge discord', title: `discord.js ${m.discord_js}` }, 'Discord bot') : m?.framework && h('span', { class: 'badge' }, m.framework))),
         showHost && h('td', { class: 'muted' }, a.host_name),
         h('td', {}, h('span', { class: 'row nowrap' }, h('span', { class: 'dot ' + cls }), label)),
         h('td', { class: 'mono small muted nowrap' }, `${a.spec.branch} @ ${short(a.last_sha)}`),
@@ -619,7 +626,7 @@ async function hostPage(id, tab = 'overview') {
     head.replaceChildren(h('div', { class: 'page-head' },
       h('div', {}, h('h1', {}, host.name), h('div', { class: 'sub' },
         h('span', { class: 'row' }, h('span', { class: 'dot ' + (host.online ? 'ok' : 'err') }), host.online ? 'Online' : `Offline · ${ago(host.last_seen)}`),
-        [i.hostname, i.os, i.kernel && `kernel ${i.kernel}`, i.arch].filter(Boolean).map((x) => h('span', {}, x)),
+        [i.hostname, i.ip, i.os, i.kernel && `kernel ${i.kernel}`, i.arch].filter(Boolean).map((x) => h('span', {}, x)),
         i.firewall && h('span', { class: 'badge' }, `firewall: ${i.firewall}`), versionBadge(i, host.latest_agent))),
       h('div', { class: 'row' }, canUpdate && upd, h('button', { class: 'btn primary', onclick: () => newAppDialog(id) }, icon('plus', 14), 'New app'))));
   };
@@ -632,21 +639,32 @@ async function hostPage(id, tab = 'overview') {
   };
 
   if (tab === 'keys') {
+    const { keys: library } = await api('/api/ssh-keys');
     const name = h('input', { placeholder: 'laptop' });
     const key = h('textarea', { class: 'mono', placeholder: 'ssh-ed25519 AAAA… you@laptop', rows: 3 });
+    const keep = h('input', { type: 'checkbox', checked: true });
     const add = h('button', { class: 'btn primary', type: 'button', onclick: () => act(add, async () => {
-      await api(`/api/hosts/${id}/ssh-keys`, { method: 'POST', body: { name: name.value, pubkey: key.value } });
+      const k = { name: name.value, pubkey: key.value };
+      await api(`/api/hosts/${id}/ssh-keys`, { method: 'POST', body: k });
+      if (keep.checked) await api('/api/ssh-keys', { method: 'POST', body: k });
       render();
     }, 'Key added') }, 'Add key');
+    const installed = new Set(host.ssh_keys.map((k) => k.pubkey.trim()));
+    const avail = library.filter((k) => !installed.has(k.pubkey.trim()));
     body.append(h('div', { class: 'stack' },
-      h('div', { class: 'section' }, h('div', { class: 's-head' }, h('div', {}, h('h2', {}, 'SSH keys'), h('p', { class: 'muted small' }, `Installed in ~nextpane/.ssh/authorized_keys. Connect with ssh nextpane@${host.info.hostname || 'host'}.`))),
+      h('div', { class: 'section' }, h('div', { class: 's-head' }, h('div', {}, h('h2', {}, 'SSH keys'), h('p', { class: 'muted small' }, `Installed in ~nextpane/.ssh/authorized_keys to log into the host: ssh nextpane@${host.info.ip || host.info.hostname || 'host'}. Git does not use them: private repositories need the app's deploy key (app Settings).`))),
         host.ssh_keys.length ? h('table', {}, h('tbody', {}, host.ssh_keys.map((k) => h('tr', {},
           h('td', {}, h('strong', {}, k.name || 'key')), h('td', { class: 'mono small muted' }, k.pubkey.slice(0, 60) + '…'),
           h('td', { class: 'num' }, h('button', { class: 'btn sm', onclick: async (e) => {
             const b = e.currentTarget;
             if (await confirmDialog('Remove key', `Remove “${k.name}” from this host?`, 'Remove')) act(b, () => api(`/api/hosts/${id}/ssh-keys/${k.id}`, { method: 'DELETE' }).then(render));
           } }, 'Remove')))))) : h('div', { class: 's-body muted' }, 'No keys yet.')),
-      section('Add a key', null, h('div', { class: 'form' }, field('Name', name), h('div', { class: 'full' }, field('Public key', key))), [h('span', {}), add])));
+      avail.length > 0 && h('div', { class: 'section' }, h('div', { class: 's-head' }, h('div', {}, h('h2', {}, 'From the key library'), h('p', { class: 'muted small' }, 'Saved keys not yet on this host. Manage the library in Settings.'))),
+        h('table', {}, h('tbody', {}, avail.map((k) => h('tr', {},
+          h('td', {}, h('strong', {}, k.name || 'key')), h('td', { class: 'mono small muted' }, k.pubkey.slice(0, 60) + '…'),
+          h('td', { class: 'num' }, h('button', { class: 'btn sm', onclick: (e) => act(e.currentTarget, () => api(`/api/hosts/${id}/ssh-keys`, { method: 'POST', body: { name: k.name, pubkey: k.pubkey } }).then(render), 'Key added') }, 'Add'))))))),
+      section('Add a key', 'Public key only (the .pub file). Never paste a private key.', h('div', { class: 'form' }, field('Name', name), h('div', { class: 'full' }, field('Public key', key)),
+        h('label', { class: 'check full' }, keep, h('span', {}, 'Save to the key library to reuse it on other hosts'))), [h('span', {}), add])));
   } else if (tab === 'settings') {
     const name = h('input', { value: host.name });
     const save = h('button', { class: 'btn primary', type: 'button', onclick: () => act(save, () => api(`/api/hosts/${id}`, { method: 'PATCH', body: { name: name.value } }).then(() => { refreshSide(); render(); }), 'Saved') }, 'Save');
@@ -717,7 +735,7 @@ async function appPage(id, tab = 'deployments') {
     const m = app.metrics;
     const hist = app.history || [];
     const deploying = app.deployments[0]?.status === 'running';
-    const deploy = h('button', { class: 'btn primary', disabled: !app.online || deploying, onclick: () => run(deploy, () => api(`/api/apps/${id}/deploy`, { method: 'POST', body: {} }), 'Deployment started') }, deploying ? 'Deploying…' : 'Deploy');
+    const deploy = h('button', { class: 'btn primary' + (deploying ? ' busy' : ''), disabled: !app.online || deploying, onclick: () => run(deploy, () => api(`/api/apps/${id}/deploy`, { method: 'POST', body: {} }), 'Deployment started') }, deploying ? 'Deploying…' : 'Deploy');
     const action = (a, label) => { const b = h('button', { class: 'btn', disabled: !app.online, onclick: () => run(b, () => api(`/api/apps/${id}/action`, { method: 'POST', body: { action: a } }), `${label}: done`) }, label); return b; };
     const cache = h('button', { class: 'btn', disabled: !app.online, onclick: async () => {
       if (await confirmDialog('Clear cache', `Delete ${s.cache_paths.join(', ') || 'nothing (no cache paths configured)'} and restart ${s.name}?`, 'Clear cache', false)) run(cache, () => api(`/api/apps/${id}/cache`, { method: 'POST' }), 'Cache cleared');
@@ -728,7 +746,8 @@ async function appPage(id, tab = 'deployments') {
     head.replaceChildren(h('div', { class: 'page-head' },
       h('div', {}, h('h1', { class: 'row' }, h('span', { class: 'dot big ' + cls }), s.name), h('div', { class: 'sub' },
         h('span', { class: 'mono' }, s.repo.replace(/^(https?:\/\/)[^@/]*@/, '$1')), h('span', { class: 'badge mono' }, `${s.branch} @ ${short(app.last_sha)}`),
-        s.port && h('span', { class: 'mono' }, `:${s.port}`), h('a', { href: `#/hosts/${app.host_id}`, class: 'badge' }, icon('hosts', 12), app.host_name), !app.online && h('span', { class: 'badge red' }, 'host offline'))),
+        s.port && (app.host_ip ? appLink(app.host_ip, s.port) : h('span', { class: 'mono' }, `:${s.port}`)), m?.framework && h('span', { class: 'badge' }, m.framework),
+        h('a', { href: `#/hosts/${app.host_id}`, class: 'badge' }, icon('hosts', 12), app.host_name), !app.online && h('span', { class: 'badge red' }, 'host offline'))),
       h('div', { class: 'row' }, m?.running ? action('stop', 'Stop') : action('start', 'Start'), action('restart', 'Restart'), cache, deploy)),
     h('div', { class: 'stats' },
       statCard('Status', label, s.auto_deploy ? 'auto-deploy' : 'manual', h('p', { class: 'dim small' }, app.deployments[0] ? `last deploy ${ago(app.deployments[0].started)}` : 'never deployed')),
@@ -806,7 +825,7 @@ async function appPage(id, tab = 'deployments') {
     } }, 'Delete app');
     body.append(h('div', { class: 'stack' },
       section('Build & runtime', null, form.el, [h('span', { class: 'dim small' }, 'Limits and commands apply immediately (the app restarts).'), save]),
-      section('Deploy key', 'For private repositories: an SSH key generated on the host (the private half never leaves it). Add the public key as a read-only deploy key in your Git provider and use the SSH clone URL.', keyBox, [h('span', {}), gen]),
+      section('Deploy key', 'For private repositories: an SSH key generated on the host (the private half never leaves it, you never paste a private key). Add the public key below as a read-only deploy key in the repository (GitHub: Settings > Deploy keys; GitLab: Settings > Repository > Deploy keys) and use the SSH clone URL (git@…).', keyBox, [h('span', {}), gen]),
       section('Duplicate', 'Create the same app (settings, firewall rules and optionally environment variables) on another host, e.g. to scale out or to build a staging copy. Private repos need a deploy key on the new host.',
         h('div', { class: 'form' }, field('Target host', dupHost), field('Name', dupName), h('label', { class: 'check full' }, dupEnv, h('span', {}, 'Copy environment variables'))), [h('span', {}), dup]),
       section('Delete app', null, null, [h('span', { class: 'small muted' }, 'This cannot be undone.'), del], 'danger')));
@@ -998,7 +1017,10 @@ async function activityPage() {
 // ---------- settings ----------
 
 async function settingsPage() {
-  const [sys, { keys }, settings] = await Promise.all([api('/api/system'), api('/api/enroll-keys'), api('/api/settings')]);
+  const [sys, { keys }, settings, { keys: library }] = await Promise.all([api('/api/system'), api('/api/enroll-keys'), api('/api/settings'), api('/api/ssh-keys')]);
+  const libName = h('input', { placeholder: 'laptop' });
+  const libKey = h('textarea', { class: 'mono', placeholder: 'ssh-ed25519 AAAA… you@laptop', rows: 3 });
+  const libAdd = h('button', { class: 'btn primary', type: 'button', onclick: () => act(libAdd, () => api('/api/ssh-keys', { method: 'POST', body: { name: libName.value, pubkey: libKey.value } }).then(render), 'Key saved') }, 'Save key');
   const docker = sys.install === 'docker';
   const upd = h('button', { class: 'btn primary', disabled: !sys.update_available || docker, onclick: async () => {
     if (await confirmDialog('Update NextPane', `Install ${sys.latest}? The panel restarts and will be unavailable for a few seconds. Agents reconnect automatically.`, 'Update', false))
@@ -1051,6 +1073,14 @@ async function settingsPage() {
           const b = e.currentTarget;
           if (await confirmDialog('Revoke key', `Revoke “${k.name}”? New hosts can no longer enroll with it.`, 'Revoke')) act(b, () => api(`/api/enroll-keys/${k.id}`, { method: 'DELETE' }).then(render));
         } }, 'Revoke')))))) : h('div', { class: 's-body muted' }, 'No active keys.')),
+    h('div', { class: 'section' }, h('div', { class: 's-head' }, h('div', {}, h('h2', {}, 'SSH key library'), h('p', { class: 'muted small' }, 'Public keys saved once, then added to any host from its SSH keys tab. Forgetting a key here does not remove it from hosts.'))),
+      library.length ? h('table', {}, h('tbody', {}, library.map((k) => h('tr', {}, h('td', {}, h('strong', {}, k.name || 'key')), h('td', { class: 'mono small muted' }, k.pubkey.slice(0, 60) + '…'),
+        h('td', { class: 'num' }, h('button', { class: 'btn sm', onclick: async (e) => {
+          const b = e.currentTarget;
+          if (await confirmDialog('Forget key', `Remove “${k.name}” from the library? Hosts keep it.`, 'Forget')) act(b, () => api(`/api/ssh-keys/${k.id}`, { method: 'DELETE' }).then(render));
+        } }, 'Forget')))))) : h('div', { class: 's-body muted' }, 'No saved keys.'),
+      h('div', { class: 's-body' }, h('div', { class: 'form' }, field('Name', libName), h('div', { class: 'full' }, field('Public key', libKey)))),
+      h('div', { class: 's-foot' }, h('span', { class: 'dim small' }, 'Public key only (the .pub file).'), libAdd)),
     section('Password', null, h('div', { class: 'form' }, field('Current password', cur), field('New password', nw, 'At least 10 characters. Signs out every session.')), [h('span', {}), pw])));
 }
 
@@ -1085,11 +1115,15 @@ async function render() {
   for (const [re, view] of routes) {
     const m = hash.match(re);
     if (!m) continue;
+    // Only slow loads get the circle, so fast navigation does not flicker.
+    clearTimeout(pageSpin);
+    pageSpin = setTimeout(() => document.getElementById('main')?.replaceChildren(h('div', { class: 'page-loading', role: 'status', 'aria-label': 'Loading' }, h('span', { class: 'spinner' }))), 250);
     try {
       await view(...m.slice(1).filter((x) => x !== undefined));
     } catch (e) {
       if (!e.auth) page({ title: 'Something went wrong' }, empty('Something went wrong', e.message, h('a', { class: 'btn', href: '#/' }, 'Back to overview')));
     }
+    clearTimeout(pageSpin); // views that redirect never call page()
     return;
   }
   page({ title: 'Page not found' }, empty('Page not found', null, h('a', { class: 'btn', href: '#/' }, 'Back to overview')));

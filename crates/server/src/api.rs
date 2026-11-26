@@ -171,6 +171,34 @@ pub async fn delete_ssh_key(State(st): State<St>, _: User, Path((id, kid)): Path
     ok()
 }
 
+/// Key library: public keys saved once and added to any host in one click.
+pub async fn saved_keys(State(st): State<St>, _: User) -> R {
+    let db = st.db.lock().unwrap();
+    let keys: Vec<Value> = db
+        .prepare("SELECT id, name, pubkey FROM saved_keys ORDER BY name")?
+        .query_map([], |r| Ok(json!({ "id": r.get::<_, i64>(0)?, "name": r.get::<_, String>(1)?, "pubkey": r.get::<_, String>(2)? })))?
+        .collect::<Result<_, _>>()?;
+    Ok(Json(json!({ "keys": keys })))
+}
+
+pub async fn save_key(State(st): State<St>, _: User, Json(k): Json<NewKey>) -> R {
+    if !valid_ssh_pubkey(&k.pubkey) {
+        return Err(bad("not an OpenSSH public key"));
+    }
+    let db = st.db.lock().unwrap();
+    db.execute("INSERT INTO saved_keys (name, pubkey) VALUES (?1, ?2) ON CONFLICT (pubkey) DO UPDATE SET name=excluded.name", params![k.name.trim(), k.pubkey.trim()])?;
+    audit(&db, "ssh_key.save", k.name.trim());
+    ok()
+}
+
+/// Removes the key from the library only; hosts that have it keep it.
+pub async fn forget_key(State(st): State<St>, _: User, Path(id): Path<i64>) -> R {
+    let db = st.db.lock().unwrap();
+    db.execute("DELETE FROM saved_keys WHERE id=?1", [id])?;
+    audit(&db, "ssh_key.forget", &id.to_string());
+    ok()
+}
+
 // ---------- apps ----------
 
 pub async fn create_app(State(st): State<St>, _: User, Path(host): Path<i64>, Json(spec): Json<AppSpec>) -> R {
@@ -213,7 +241,10 @@ pub async fn app(State(st): State<St>, _: User, Path(id): Path<i64>) -> R {
     v["deployments"] = deps.into();
     let host = v["host_id"].as_i64().unwrap_or(0);
     drop(db);
-    v["online"] = st.live.lock().unwrap().contains_key(&host).into();
+    let live = st.live.lock().unwrap();
+    v["online"] = live.contains_key(&host).into();
+    v["host_ip"] = live.get(&host).map(|l| l.info.ip.clone()).unwrap_or_default().into();
+    drop(live);
     let has_token = crate::discord::has_token_var(&st, id); // before taking the history lock
     let name = v["spec"]["name"].as_str().unwrap_or_default().to_string();
     let hist = st.history.lock().unwrap();
@@ -294,10 +325,13 @@ pub fn start_deploy(st: &St, app_id: i64, sha: Option<String>, trigger: &str) ->
     let (name, trigger) = (spec.name.clone(), trigger.to_string());
     tokio::spawn(async move {
         let r = hub::command(&st, host, Command::Deploy { app: spec, env, sha }, Duration::from_secs(3600)).await;
-        let (status, log, sha) = match r {
+        let (status, mut log, sha) = match r {
             Ok(r) => (if r.ok { "success" } else { "failed" }, r.output, r.data),
             Err(e) => ("failed", e.1, None),
         };
+        if status == "failed" {
+            log.push_str(git_hint(&log));
+        }
         {
             let db = st.db.lock().unwrap();
             db.execute("UPDATE deployments SET status=?1, log=?2, finished=?3, sha=COALESCE(?4, sha) WHERE id=?5", params![status, log, now(), sha, dep]).ok();
@@ -310,6 +344,19 @@ pub fn start_deploy(st: &St, app_id: i64, sha: Option<String>, trigger: &str) ->
         notify::send(&st, if status == "success" { "deploy_success" } else { "deploy_failed" }, msg);
     });
     Ok(dep)
+}
+
+/// Explain the usual git access errors (host SSH keys are often mistaken for git credentials).
+fn git_hint(log: &str) -> &'static str {
+    if log.contains("Permission denied (publickey)") {
+        "\nhint: the host cannot read this repository. Open the app's Settings > Deploy key, generate the key and add it \
+to the repository as a read-only deploy key (GitHub: Settings > Deploy keys; GitLab: Settings > Repository > Deploy keys). \
+Never paste a private key into NextPane. Keys in the host's \"SSH keys\" tab only allow logging into the host, git does not use them.\n"
+    } else if log.contains("could not read Username") {
+        "\nhint: private repository over HTTPS. Use the SSH clone URL (git@…) and add the app's deploy key (Settings > Deploy key) to the repository.\n"
+    } else {
+        ""
+    }
 }
 
 /// Auto-deploy: the agent reports the branch head; deploy when it moved.

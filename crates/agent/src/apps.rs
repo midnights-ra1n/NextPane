@@ -187,9 +187,60 @@ fn default_install(dir: &Path) -> Option<String> {
     })
 }
 
+fn package_json(dir: &Path) -> Option<serde_json::Value> {
+    serde_json::from_str(&fs::read_to_string(dir.join("package.json")).ok()?).ok()
+}
+
 fn default_build(dir: &Path) -> Option<String> {
-    let pkg: serde_json::Value = serde_json::from_str(&fs::read_to_string(dir.join("package.json")).ok()?).ok()?;
-    pkg.pointer("/scripts/build").is_some().then(|| format!("{} run build", package_manager(dir)))
+    package_json(dir)?.pointer("/scripts/build").is_some().then(|| format!("{} run build", package_manager(dir)))
+}
+
+/// Framework from package.json dependencies: (display name, start command used when there is no
+/// "start" script). Static sites are served with their own preview server, bound to every interface.
+pub fn framework(pkg: &serde_json::Value) -> Option<(&'static str, Option<&'static str>)> {
+    let has = |d: &str| pkg.pointer(&format!("/dependencies/{d}")).or_else(|| pkg.pointer(&format!("/devDependencies/{d}"))).is_some();
+    const VITE: &str = "node_modules/.bin/vite preview --host 0.0.0.0 --port ${PORT:-3000} --strictPort";
+    Some(if has("next") {
+        ("Next.js", Some("node_modules/.bin/next start"))
+    } else if has("nuxt") {
+        ("Nuxt", Some("node .output/server/index.mjs"))
+    } else if has("@sveltejs/kit") {
+        ("SvelteKit", Some("node build"))
+    } else if has("astro") {
+        ("Astro", Some("node_modules/.bin/astro preview --host 0.0.0.0 --port ${PORT:-3000}"))
+    } else if has("gatsby") {
+        ("Gatsby", Some("node_modules/.bin/gatsby serve -H 0.0.0.0 -p ${PORT:-3000}"))
+    } else if has("@remix-run/react") {
+        ("Remix", None)
+    } else if has("@react-router/dev") {
+        ("React Router", None)
+    } else if has("@nestjs/core") {
+        ("NestJS", Some("node dist/main"))
+    } else if has("@angular/core") {
+        ("Angular", None)
+    } else if has("vite") {
+        (if has("vue") { "Vue" } else if has("react") { "React" } else if has("svelte") { "Svelte" } else if has("solid-js") { "Solid" } else { "Vite" }, Some(VITE))
+    } else if has("vue") {
+        ("Vue", None)
+    } else if has("express") {
+        ("Express", None)
+    } else if has("fastify") {
+        ("Fastify", None)
+    } else if has("hono") {
+        ("Hono", None)
+    } else {
+        return None;
+    })
+}
+
+/// `<pm> start` when package.json has a start script, else the framework's own server.
+fn default_start(dir: &Path) -> String {
+    let pm_start = format!("{} start", package_manager(dir));
+    let Some(pkg) = package_json(dir) else { return pm_start };
+    if pkg.pointer("/scripts/start").is_some() {
+        return pm_start;
+    }
+    framework(&pkg).and_then(|f| f.1).map_or(pm_start, String::from)
 }
 
 /// Quote a command for `ExecStart=/bin/sh -c "..."` (systemd unescapes \\ and \", expands % and $).
@@ -208,8 +259,8 @@ fn limits(spec: &AppSpec) -> Vec<String> {
     l
 }
 
-pub fn unit_file(spec: &AppSpec, pm: &str) -> String {
-    let start = if spec.start_cmd.is_empty() { format!("{pm} start") } else { spec.start_cmd.clone() };
+pub fn unit_file(spec: &AppSpec, default_start: &str) -> String {
+    let start = if spec.start_cmd.is_empty() { default_start } else { &spec.start_cmd };
     let port = spec.port.map(|p| format!("Environment=PORT={p}\n")).unwrap_or_default();
     let limits: String = limits(spec).iter().map(|l| format!("{l}\n")).collect();
     format!(
@@ -221,12 +272,12 @@ Environment=PATH={path}\n{port}EnvironmentFile=-{env}\nExecStart=/bin/sh -c \"{s
         dir = app_dir(&spec.name).display(),
         path = path_var(),
         env = env_path(&spec.name),
-        start = systemd_quote(&start),
+        start = systemd_quote(start),
     )
 }
 
-fn install_unit(log: &mut String, spec: &AppSpec, pm: &str) -> Result<(), String> {
-    fs::write(format!("/etc/systemd/system/{}", unit_name(&spec.name)), unit_file(spec, pm)).map_err(|e| e.to_string())?;
+fn install_unit(log: &mut String, spec: &AppSpec, dir: &Path) -> Result<(), String> {
+    fs::write(format!("/etc/systemd/system/{}", unit_name(&spec.name)), unit_file(spec, &default_start(dir))).map_err(|e| e.to_string())?;
     run(log, Cmd::new("systemctl").arg("daemon-reload"))?;
     Ok(())
 }
@@ -272,7 +323,9 @@ fn deploy(log: &mut String, spec: &AppSpec, env: &[EnvVar], want: Option<&str>) 
     log.push_str(&format!("$ checkout {sha}\n"));
     user_sh(log, "mkdir -p \"$2\" && cd \"$2\" && git --git-dir=\"$1/repo.git\" --work-tree=. checkout -f \"$3\" -- .", &[&ds, &rs, &sha])?;
 
-    let pm = package_manager(&rel);
+    if let Some((name, _)) = package_json(&rel).as_ref().and_then(framework) {
+        log.push_str(&format!("detected {name}\n"));
+    }
     let install = Some(spec.install_cmd.clone()).filter(|c| !c.is_empty()).or_else(|| default_install(&rel));
     if let Some(cmd) = install {
         build_step(log, spec, &rel, &cmd)?;
@@ -282,7 +335,7 @@ fn deploy(log: &mut String, spec: &AppSpec, env: &[EnvVar], want: Option<&str>) 
         build_step(log, spec, &rel, &cmd)?;
     }
 
-    install_unit(log, spec, pm)?;
+    install_unit(log, spec, &rel)?;
     user_sh(log, "ln -sfn \"$2\" \"$1/.current.tmp\" && mv -Tf \"$1/.current.tmp\" \"$1/current\"", &[&ds, &rs])?;
     run(log, Cmd::new("systemctl").args(["enable", &unit_name(&spec.name)]))?;
     run(log, Cmd::new("systemctl").args(["restart", &unit_name(&spec.name)]))?;
@@ -305,7 +358,7 @@ fn configure(log: &mut String, spec: &AppSpec, env: &[EnvVar]) -> Result<(), Str
     write_env(&spec.name, env)?;
     let current = app_dir(&spec.name).join("current");
     if current.exists() {
-        install_unit(log, spec, package_manager(&current))?;
+        install_unit(log, spec, &current)?;
         run(log, Cmd::new("systemctl").args(["try-restart", &unit_name(&spec.name)]))?;
         log.push_str("configuration applied\n");
     } else {
@@ -384,11 +437,16 @@ mod tests {
     #[test]
     fn unit_quoting_and_limits() {
         let spec = AppSpec { name: "web".into(), start_cmd: r#"node server.js --msg "hi" $PORT 50%"#.into(), port: Some(3000), memory_mb: Some(512), cpu_percent: Some(50), ..Default::default() };
-        let u = unit_file(&spec, "npm");
+        let u = unit_file(&spec, "npm start");
         assert!(u.contains(r#"ExecStart=/bin/sh -c "node server.js --msg \"hi\" $$PORT 50%%""#), "{u}");
         assert!(u.contains("MemoryMax=512M\nCPUQuota=50%\n"));
         assert!(u.contains("Environment=PORT=3000\n"));
-        assert!(unit_file(&AppSpec { name: "x".into(), ..Default::default() }, "pnpm").contains("ExecStart=/bin/sh -c \"pnpm start\""));
+        assert!(unit_file(&AppSpec { name: "x".into(), ..Default::default() }, "pnpm start").contains("ExecStart=/bin/sh -c \"pnpm start\""));
+        let vite = framework(&serde_json::json!({ "dependencies": { "vue": "3" }, "devDependencies": { "vite": "5" } })).unwrap();
+        assert_eq!(vite.0, "Vue");
+        assert!(unit_file(&AppSpec { name: "x".into(), ..Default::default() }, vite.1.unwrap()).contains("--port $${PORT:-3000}"));
+        assert_eq!(framework(&serde_json::json!({ "dependencies": { "next": "15", "react": "19" } })).unwrap().0, "Next.js");
+        assert!(framework(&serde_json::json!({ "dependencies": { "lodash": "4" } })).is_none());
         assert!(valid_sha(&"a".repeat(40)) && !valid_sha("abc"));
     }
 }

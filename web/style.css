@@ -137,9 +137,16 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .dot.ok { background: var(--ok); box-shadow: 0 0 0 3px rgba(63,185,80,.15); }
 .dot.warn { background: var(--warn); }
 .dot.err { background: var(--err); }
-.dot.run { background: var(--warn); animation: pulse 1.2s ease-in-out infinite; }
-@keyframes pulse { 50% { opacity: .35; } }
-@media (prefers-reduced-motion: reduce) { .dot.run { animation: none; } }
+.dot.run { width: 10px; height: 10px; background: none; border: 2px solid var(--warn); border-right-color: transparent; animation: spin .8s linear infinite; }
+.dot.big.run { width: 12px; height: 12px; }
+/* loading circle: buttons while their action runs, pages while they load */
+.spinner, .btn.busy::before { content: ''; width: 12px; height: 12px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; display: inline-block; flex: none; animation: spin .7s linear infinite; }
+.btn.busy:disabled { opacity: .7; cursor: progress; }
+.page-loading { display: flex; justify-content: center; padding: 140px 0; color: var(--fg-3); }
+.page-loading .spinner { width: 22px; height: 22px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+/* a spinner carries meaning, so it slows down instead of stopping */
+@media (prefers-reduced-motion: reduce) { .dot.run, .spinner, .btn.busy::before { animation-duration: 2s; } }
 .badge { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px; border-radius: 999px; font-size: 12px; border: 1px solid var(--line-2); color: var(--fg-2); background: var(--bg-1); white-space: nowrap; }
 .badge.blue { color: var(--blue); border-color: rgba(50,145,255,.4); background: rgba(50,145,255,.08); }
 .badge.red { color: var(--err); border-color: rgba(242,87,87,.4); background: rgba(242,87,87,.08); }

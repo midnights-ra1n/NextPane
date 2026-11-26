@@ -13,7 +13,7 @@ service. Create one from a host page: **New app**.
 | Port | `3000` | Exported to the app as `PORT`. |
 | Install command | auto | See *Build pipeline*. |
 | Build command | auto | See *Build pipeline*. |
-| Start command | `<pm> start` | Run with `/bin/sh -c`, so `node server.js`, `npx next start -p $PORT`… work. |
+| Start command | auto | `<pm> start` when `package.json` has a `start` script, else the framework's server (see *Frameworks*). Run with `/bin/sh -c`, so `node server.js`, `npx next start -p $PORT`… work. |
 | CPU limit | none | systemd `CPUQuota`, in % of one core (`150` = 1.5 cores). |
 | Memory limit | none | systemd `MemoryMax`, in MB. Exceeding it gets the app OOM-killed and restarted. |
 | Cache paths | `.next/cache` | Paths relative to the release, wiped by **Clear cache**. |
@@ -38,6 +38,7 @@ A deployment runs on the host, step by step, and its full log is kept in the pan
    | none | `npm install` | `npm run build` | `npm start` |
 
    The build step only runs when `package.json` has a `build` script (or a build command is set).
+   The start column applies when `package.json` has a `start` script; otherwise see *Frameworks*.
 4. **Build**. Install and build run in a transient systemd unit (`nextpane-build-<app>`) as
    `nextpane`, **with the app's environment variables and resource limits**.
 5. **Switch**: the `current` symlink atomically points to the new release, the unit is (re)written and
@@ -49,7 +50,33 @@ If any step fails, the previous release keeps running untouched.
 The running service is `nextpane-app-<app>.service`: `User=nextpane`, `NODE_ENV=production`,
 `Restart=on-failure`, `NoNewPrivileges`, `ProtectSystem=full`, `PrivateTmp`.
 
+## Frameworks
+
+The framework is detected from the `package.json` dependencies, logged in the deployment
+(`detected Next.js`) and shown as a badge on the app. When there is no `start` script, NextPane starts
+the app with the framework's own server, listening on every interface on `PORT`:
+
+| Framework | Default start (no `start` script) |
+|---|---|
+| Next.js | `next start` |
+| Nuxt | `node .output/server/index.mjs` |
+| SvelteKit (adapter-node) | `node build` |
+| Astro | `astro preview --host 0.0.0.0 --port $PORT` |
+| Gatsby | `gatsby serve -H 0.0.0.0 -p $PORT` |
+| NestJS | `node dist/main` |
+| Vite (Vue, React, Svelte, Solid) | `vite preview --host 0.0.0.0 --port $PORT --strictPort` |
+
+Remix, React Router, Angular, Express, Fastify and Hono are detected (badge) but use their `start`
+script. Set a start command to override any default.
+
+The app is reachable at `http://<host IP>:<port>`, shown as a link on the app page. The host IP is the
+address the agent uses to reach the panel. Open the port in the app's *Firewall* tab if needed.
+
 ## Private repositories
+
+> `Permission denied (publickey)` during `git fetch` means the host has no access to the repository.
+> Keys in the host's **SSH keys** tab are only used to log into the host; git uses the app's deploy key.
+> Never paste a private key into NextPane.
 
 Use an SSH **deploy key**, generated on the host (the private key never leaves it):
 
@@ -64,6 +91,13 @@ The first connection accepts the provider's host key (`StrictHostKeyChecking=acc
 
 > HTTPS with a token in the URL (`https://user:token@host/repo.git`) also works, but the token is
 > then stored in the app settings in clear text. Prefer deploy keys.
+
+## SSH key library
+
+*Settings › SSH key library* stores public keys once (laptop, CI…). A host's **SSH keys** tab then
+lists the saved keys it does not have yet, each added with one click. Adding a key by hand on a host
+also saves it to the library (checkbox). Forgetting a key from the library does not remove it from
+hosts.
 
 ## Auto-deploy
 

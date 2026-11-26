@@ -62,6 +62,9 @@ pub struct HostInfo {
     pub firewall: String,
     /// deb | rpm | binary
     pub install: String,
+    /// Local address the agent uses to reach the panel (apps are served on <ip>:<port>).
+    #[serde(default)]
+    pub ip: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -94,6 +97,9 @@ pub struct AppMetrics {
     /// discord.js version found in the deployed release (the app is a Discord bot).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub discord_js: Option<String>,
+    /// Framework detected from the deployed package.json (Next.js, Nuxt, Vue...).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub framework: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]

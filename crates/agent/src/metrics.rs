@@ -103,20 +103,29 @@ impl Collector {
                 mem: read(&format!("{cg}/memory.current")).trim().parse().unwrap_or(0),
                 disk: disk.get(name).copied().unwrap_or(0),
                 discord_js: discord_js(name),
+                framework: framework(name),
             });
         }
         m
     }
 }
 
-/// Version of discord.js installed in the current release, if any.
-fn discord_js(app: &str) -> Option<String> {
+/// A file of the current release. It is owned by the app user: read at most 64 KB.
+fn release_file(app: &str, rel: &str) -> Option<String> {
     use std::io::Read;
-    let p = crate::apps::app_dir(app).join("current/node_modules/discord.js/package.json");
-    // The file is owned by the app user: read at most 64 KB and only report a version-shaped string.
     let mut s = String::new();
-    fs::File::open(p).ok()?.take(64 * 1024).read_to_string(&mut s).ok()?;
-    parse_version(&s)
+    fs::File::open(crate::apps::app_dir(app).join("current").join(rel)).ok()?.take(64 * 1024).read_to_string(&mut s).ok()?;
+    Some(s)
+}
+
+/// Version of discord.js installed in the current release, if any (only a version-shaped string).
+fn discord_js(app: &str) -> Option<String> {
+    parse_version(&release_file(app, "node_modules/discord.js/package.json")?)
+}
+
+fn framework(app: &str) -> Option<String> {
+    let pkg = serde_json::from_str(&release_file(app, "package.json")?).ok()?;
+    crate::apps::framework(&pkg).map(|f| f.0.to_string())
 }
 
 fn parse_version(pkg: &str) -> Option<String> {

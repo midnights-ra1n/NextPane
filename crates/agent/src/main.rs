@@ -10,7 +10,7 @@ use futures_util::{SinkExt, StreamExt};
 use nextpane_proto::{AgentMsg, AppSpec, HostInfo, ServerMsg};
 use std::{fs, io::Write, os::unix::fs::OpenOptionsExt, process::Command, time::{Duration, Instant}};
 use tokio::{sync::mpsc, task::spawn_blocking, time::interval};
-use tokio_tungstenite::{connect_async_tls_with_config, tungstenite::{client::IntoClientRequest, Message}, Connector};
+use tokio_tungstenite::{connect_async_tls_with_config, tungstenite::{client::IntoClientRequest, Message}, Connector, MaybeTlsStream};
 
 /// Root-only agent state (host secret, firewall state, update downloads).
 pub const STATE: &str = "/var/lib/nextpane-agent";
@@ -70,9 +70,15 @@ async fn session(server: &str) -> Result<(), Error> {
     let connector = (!fp.trim().is_empty()).then(|| Connector::Rustls(pinned::config(fp.trim())));
     let (ws, _) = connect_async_tls_with_config(req, None, false, connector).await?;
     eprintln!("connected to {server}");
-    let (mut sink, mut stream) = ws.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<AgentMsg>();
-    let info = spawn_blocking(host_info).await?;
+    let mut info = spawn_blocking(host_info).await?;
+    let tcp = match ws.get_ref() {
+        MaybeTlsStream::Plain(t) => Some(t),
+        MaybeTlsStream::Rustls(t) => Some(t.get_ref().0),
+        _ => None,
+    };
+    info.ip = tcp.and_then(|t| t.local_addr().ok()).map(|a| a.ip().to_string()).unwrap_or_default();
+    let (mut sink, mut stream) = ws.split();
     sink.send(Message::text(serde_json::to_string(&AgentMsg::Hello(info))?)).await?;
 
     let mut apps: Vec<AppSpec> = vec![];
@@ -168,6 +174,7 @@ fn host_info() -> HostInfo {
         mem_total: mem_kb * 1024,
         firewall: firewall::backend().into(),
         install: install_method().into(),
+        ip: String::new(), // filled from the panel connection
     }
 }
 
