@@ -188,13 +188,13 @@ fn new_git_key(st: &St, action: &str) -> R {
         audit(&db, action, &public);
     }
     hub::resync_all(st);
-    Ok(Json(json!({ "public": public })))
+    Ok(Json(json!({ "public": public, "fingerprint": crypto::ssh_fingerprint(&public) })))
 }
 
 pub async fn get_git_key(State(st): State<St>, _: User) -> R {
     let existing = load_git_key(&st.db.lock().unwrap(), &st.key);
     match existing {
-        Some((public, _)) => Ok(Json(json!({ "public": public }))),
+        Some((public, _)) => Ok(Json(json!({ "public": public, "fingerprint": crypto::ssh_fingerprint(&public) }))),
         None => new_git_key(&st, "git_key.create"),
     }
 }
@@ -362,7 +362,7 @@ pub fn start_deploy(st: &St, app_id: i64, sha: Option<String>, trigger: &str) ->
             Err(e) => ("failed", e.1, None),
         };
         if status == "failed" {
-            log.push_str(git_hint(&log));
+            log.push_str(&git_hint(&st, host, &log));
         }
         {
             let db = st.db.lock().unwrap();
@@ -379,16 +379,23 @@ pub fn start_deploy(st: &St, app_id: i64, sha: Option<String>, trigger: &str) ->
 }
 
 /// Explain the usual git access errors (host SSH keys are often mistaken for git credentials).
-fn git_hint(log: &str) -> &'static str {
-    if log.contains("Permission denied (publickey)") {
-        "\nhint: the host cannot read this repository. Add the NextPane deploy key (Settings > Deploy key) once to your Git \
-account (GitHub: Settings > SSH and GPG keys; GitLab: Preferences > SSH Keys; Gitea/Forgejo: Settings > SSH / GPG Keys). \
-Never paste a private key into NextPane. Keys in the host's \"SSH keys\" tab only allow logging into the host, git does not use them.\n"
-    } else if log.contains("could not read Username") {
-        "\nhint: private repository over HTTPS. Use the SSH clone URL (git@…) and add the NextPane deploy key (Settings > Deploy key) to your Git account.\n"
-    } else {
-        ""
+fn git_hint(st: &St, host: i64, log: &str) -> String {
+    if log.contains("could not read Username") {
+        return "\nhint: private repository over HTTPS. Use the SSH clone URL (git@…) and add the NextPane deploy key (Settings > Deploy key) to your Git account.\n".into();
     }
+    if !log.contains("Permission denied (publickey)") {
+        return String::new();
+    }
+    let agent = st.live.lock().unwrap().get(&host).map(|l| l.info.version.clone()).unwrap_or_default();
+    if !agent.is_empty() && crate::update::is_newer(crate::VERSION, &agent) {
+        return format!("\nhint: this host runs agent {agent}, older than the panel ({}): it may not use the shared deploy key. \
+Update it (Hosts > Update agent), then deploy again.\n", crate::VERSION);
+    }
+    let fp = load_git_key(&st.db.lock().unwrap(), &st.key).map(|k| crypto::ssh_fingerprint(&k.0)).unwrap_or_default();
+    format!("\nhint: the host cannot read this repository. Add the NextPane deploy key (Settings > Deploy key, fingerprint {fp}) \
+once to a Git account that can read it, as an Authentication key (GitHub: Settings > SSH and GPG keys, which lists each key's fingerprint; \
+GitLab: Preferences > SSH Keys; Gitea/Forgejo: Settings > SSH / GPG Keys). Never paste a private key into NextPane. \
+Keys in the host's \"SSH keys\" tab only allow logging into the host, git does not use them.\n")
 }
 
 /// Auto-deploy: the agent reports the branch head; deploy when it moved.

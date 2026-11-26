@@ -1078,7 +1078,7 @@ async function settingsPage() {
           if (await confirmDialog('Revoke key', `Revoke “${k.name}”? New hosts can no longer enroll with it.`, 'Revoke')) act(b, () => api(`/api/enroll-keys/${k.id}`, { method: 'DELETE' }).then(render));
         } }, 'Revoke')))))) : h('div', { class: 's-body muted' }, 'No active keys.')),
     section('Deploy key', 'One SSH key for every app on every host. Add this public key once to your Git account (GitHub: Settings › SSH and GPG keys; GitLab: Preferences › SSH Keys; Gitea/Forgejo: Settings › SSH / GPG Keys), then use SSH clone URLs (git@…).',
-      h('div', { class: 'stack' }, code(gitKey.public),
+      h('div', { class: 'stack' }, code(gitKey.public), h('p', { class: 'mono small dim' }, `Fingerprint ${gitKey.fingerprint}: compare with the list of keys on GitHub.`),
         h('p', { class: 'muted small' }, 'Every host holds the private key, and on a personal account the key can also push to your repositories. Safer: a dedicated Git account with read-only access to the repositories you deploy.')),
       [h('span', { class: 'dim small' }, 'An app can still use its own key (app Settings).'), rotate]),
     h('div', { class: 'section' }, h('div', { class: 's-head' }, h('div', {}, h('h2', {}, 'SSH key library'), h('p', { class: 'muted small' }, 'Public keys saved once, then added to any host from its SSH keys tab. Forgetting a key here does not remove it from hosts.'))),

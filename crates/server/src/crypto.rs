@@ -76,6 +76,12 @@ pub fn ssh_keypair(comment: &str) -> (String, String) {
     )
 }
 
+/// `SHA256:…` fingerprint of a public key line, as shown by ssh-keygen -l and Git providers.
+pub fn ssh_fingerprint(public: &str) -> String {
+    let blob = public.split_whitespace().nth(1).and_then(|b| B64.decode(b).ok()).unwrap_or_default();
+    format!("SHA256:{}", base64::engine::general_purpose::STANDARD_NO_PAD.encode(Sha256::digest(blob)))
+}
+
 pub fn seal(key: &[u8; 32], plain: &str) -> String {
     let mut nonce = [0u8; 12];
     rand::thread_rng().fill_bytes(&mut nonce);
@@ -122,6 +128,11 @@ mod tests {
             assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
             let derived = String::from_utf8_lossy(&o.stdout);
             assert_eq!(derived.split_whitespace().nth(1), public.split_whitespace().nth(1));
+            let pubpath = std::env::temp_dir().join(format!("np-test-{}.pub", token()));
+            fs::write(&pubpath, &public).unwrap();
+            let l = std::process::Command::new("ssh-keygen").arg("-l").arg("-f").arg(&pubpath).output().unwrap();
+            let _ = fs::remove_file(&pubpath);
+            assert_eq!(String::from_utf8_lossy(&l.stdout).split_whitespace().nth(1), Some(ssh_fingerprint(&public).as_str()));
         }
     }
 

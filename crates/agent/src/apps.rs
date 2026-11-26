@@ -132,14 +132,14 @@ fn user_sh(log: &mut String, script: &str, args: &[&str]) -> Result<String, Stri
     run(log, as_user("sh")?.arg("-c").arg(script).arg("sh").args(args))
 }
 
+/// The app's own key first: if the provider does not know it, ssh falls back to the shared key.
+fn ssh_keys(app: &str) -> Vec<PathBuf> {
+    [app_dir(app).join("deploy_key"), Path::new(HOME).join(GIT_KEY)].into_iter().filter(|k| k.exists()).collect()
+}
+
 fn git(app: &str) -> Result<Cmd, String> {
     let mut c = as_user("git")?;
-    // The app's own key first: if the provider does not know it, ssh falls back to the shared key.
-    let keys: String = [app_dir(app).join("deploy_key"), Path::new(HOME).join(GIT_KEY)]
-        .iter()
-        .filter(|k| k.exists())
-        .map(|k| format!("-i {} ", k.display()))
-        .collect();
+    let keys: String = ssh_keys(app).iter().map(|k| format!("-i {} ", k.display())).collect();
     let only = if keys.is_empty() { "" } else { "-o IdentitiesOnly=yes " };
     c.env("GIT_SSH_COMMAND", format!("ssh {keys}{only}-o StrictHostKeyChecking=accept-new"));
     Ok(c)
@@ -313,6 +313,8 @@ fn deploy(log: &mut String, spec: &AppSpec, env: &[EnvVar], want: Option<&str>) 
     write_env(&spec.name, env)?;
     user_sh(log, "mkdir -p \"$1/releases\" && { [ -d \"$1/repo.git\" ] || git init -q --bare \"$1/repo.git\"; }", &[&ds])?;
 
+    let keys: Vec<String> = ssh_keys(&spec.name).iter().map(|k| k.display().to_string()).collect();
+    log.push_str(&format!("ssh keys: {}\n", if keys.is_empty() { "none (no shared deploy key received from the panel)".into() } else { keys.join(", ") }));
     log.push_str(&format!("$ git fetch {} {}\n", spec.repo, spec.branch));
     let refspec = format!("+refs/heads/{0}:refs/heads/{0}", spec.branch);
     run(log, git(&spec.name)?.arg(format!("--git-dir={ds}/repo.git")).args(["fetch", "--force", "--depth=50", "--", &spec.repo, &refspec]))?;
