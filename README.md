@@ -57,15 +57,18 @@ flowchart LR
 
 ## Quick start
 
-**1. Run the panel** (Docker, with automatic HTTPS through Caddy):
+**1. Run the panel** (Docker Compose):
 
 ```sh
 git clone https://github.com/midnights-ra1n/NextPane && cd NextPane
-PANEL_DOMAIN=panel.example.com docker compose up -d
+docker compose up -d                       # panel on port 3000, behind your own reverse proxy
+# or, with the bundled Caddy and automatic HTTPS:
+# PANEL_DOMAIN=panel.example.com NEXTPANE_PORT=127.0.0.1:3000 docker compose --profile caddy up -d
 docker compose logs nextpane | grep "setup code"
 ```
 
-Open `https://panel.example.com`, enter the setup code and create the admin account.
+Open the panel (`https://panel.example.com`, or `http://<host>:3000`), enter the setup code and create
+the admin account. Every setup (existing proxy, other host, Traefik…) is in [Installation](docs/installation.md#docker-compose).
 Debian/Ubuntu/RHEL packages are described in [Installation](docs/installation.md).
 
 **2. Add a host.** *Hosts › Add host* creates an enrollment key and gives you the command to run on the server:
@@ -83,7 +86,7 @@ Many hosts at once? Use the [Ansible role](docs/ansible.md).
 
 | Guide | |
 |---|---|
-| [Installation](docs/installation.md) | Server (Docker, deb, rpm), reverse proxy, agent install and uninstall |
+| [Installation](docs/installation.md) | Server (Docker, Docker Compose, deb, rpm), reverse proxy, agent install and uninstall |
 | [Configuration](docs/configuration.md) | Every setting and file location |
 | [Apps & deployments](docs/apps.md) | Git, builds, private repos, auto-deploy, webhooks, env vars, limits, cache, logs |
 | [Monitoring](docs/monitoring.md) | What each metric means, host vs. apps |

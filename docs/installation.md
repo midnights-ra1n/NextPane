@@ -29,16 +29,91 @@ docker run -d --name nextpane --restart unless-stopped \
 docker logs nextpane | grep "setup code"
 ```
 
-Or with the bundled `docker-compose.yml`, which adds Caddy for automatic HTTPS:
-
-```sh
-PANEL_DOMAIN=panel.example.com docker compose up -d
-```
-
 Data (SQLite database **and the encryption key**) lives in the `/data` volume. Back it up.
 
-> In Docker the panel cannot replace itself: update with `docker compose pull && docker compose up -d`.
-> The UI shows the available version and this command.
+> In Docker the panel cannot replace itself: update with `docker pull` and recreate the container
+> (with Compose: `docker compose pull && docker compose up -d`). The UI shows the available version.
+
+### Docker Compose
+
+The repository ships a [`docker-compose.yml`](../docker-compose.yml). Only the panel starts by
+default; a Caddy reverse proxy with automatic HTTPS is optional (Compose profile `caddy`).
+
+```sh
+git clone https://github.com/midnights-ra1n/NextPane && cd NextPane
+# or only the file: curl -fLO https://raw.githubusercontent.com/midnights-ra1n/NextPane/main/docker-compose.yml
+```
+
+Settings are read from the shell or from a `.env` file next to `docker-compose.yml`:
+
+| Variable | Default | Description |
+|---|---|---|
+| `NEXTPANE_PORT` | `3000` | Published port. `3000` listens on every interface, `127.0.0.1:3000` only on localhost (use it when the proxy runs on the same host), `8080` changes the port. |
+| `NEXTPANE_RELEASE_URL` | *(empty)* | See [Configuration](configuration.md). Enables update checks and `/install.sh`. |
+| `PANEL_DOMAIN` | — | Only with the `caddy` profile: domain served over HTTPS. |
+
+Example `.env`:
+
+```sh
+NEXTPANE_PORT=127.0.0.1:3000
+NEXTPANE_RELEASE_URL=https://github.com/midnights-ra1n/NextPane/releases
+PANEL_DOMAIN=panel.example.com
+```
+
+Pick the setup that matches your infrastructure:
+
+**A. Panel only, port 3000** (you already have a reverse proxy, or you test on a LAN)
+
+```sh
+docker compose up -d
+docker compose logs nextpane | grep "setup code"
+```
+
+The panel is at `http://<host>:3000`. Then:
+
+- **Proxy on the same host** (nginx, Caddy, HAProxy, Apache installed on the system): set
+  `NEXTPANE_PORT=127.0.0.1:3000` so port 3000 is not exposed, and point the proxy to
+  `http://127.0.0.1:3000` (configurations in [Reverse proxy](#reverse-proxy-https)).
+- **Proxy on another host**: keep `NEXTPANE_PORT=3000`, point the proxy to `http://<panel-ip>:3000`
+  and allow port 3000 only from the proxy's IP in the panel host's firewall. Traffic between the
+  proxy and the panel is plain HTTP: keep it on a private network or a VPN.
+- **Proxy running in Docker** (Traefik, Nginx Proxy Manager, Caddy…): either target
+  `http://<host-ip>:3000`, or attach the panel to the proxy's network with a
+  `docker-compose.override.yml` and target `http://nextpane:3000`:
+
+  ```yaml
+  services:
+    nextpane:
+      ports: !reset []        # not published at all, only reachable through the proxy
+      networks: [default, proxy]
+  networks:
+    proxy:
+      external: true          # name of your proxy's network (docker network ls)
+  ```
+
+  Compose merges `docker-compose.override.yml` automatically on `docker compose up -d`.
+
+Generate the certificate in your proxy as usual (Let's Encrypt, Nginx Proxy Manager, Traefik
+`certresolver`…). The proxy only needs to forward WebSockets and `X-Forwarded-Proto`, see below.
+
+**B. Panel + bundled Caddy** (nothing listens on 80/443 on this host)
+
+```sh
+PANEL_DOMAIN=panel.example.com NEXTPANE_PORT=127.0.0.1:3000 docker compose --profile caddy up -d
+docker compose logs nextpane | grep "setup code"
+```
+
+Point the DNS of `PANEL_DOMAIN` to the host and open ports 80 and 443: Caddy obtains and renews the
+Let's Encrypt certificate itself. Always pass `--profile caddy` (or set `COMPOSE_PROFILES=caddy`
+in `.env`), including for `pull`, `up` and `down`.
+
+**Agents** connect to `wss://<domain>/agent/ws` behind HTTPS, or `ws://<host>:3000/agent/ws` on a
+trusted network without TLS.
+
+**Update:** `docker compose pull && docker compose up -d` (add `--profile caddy` for setup B).
+**Backup:** `docker compose stop nextpane`, then copy the `nextpane-data` volume
+(`docker run --rm -v nextpane_nextpane-data:/data -v "$PWD":/backup alpine tar czf /backup/nextpane-data.tgz -C /data .`).
+The volume name is prefixed with the Compose project name (the directory name by default).
 
 ### Debian / Ubuntu (.deb)
 
@@ -108,6 +183,23 @@ server {
 ```
 
 When a proxy is in front, bind the panel to localhost: `NEXTPANE_LISTEN=127.0.0.1:3000`.
+In Docker, publish the port on localhost instead: `NEXTPANE_PORT=127.0.0.1:3000` (Compose) or
+`-p 127.0.0.1:3000:3000`.
+
+**Nginx Proxy Manager:** create a *Proxy Host* to `http://<host-ip>:3000` (or `nextpane:3000` on a
+shared network), tick *Websockets Support*, and request a Let's Encrypt certificate in the *SSL* tab.
+
+**Traefik:** WebSockets and `X-Forwarded-Proto` work out of the box. With the panel on Traefik's
+network, add to the `nextpane` service (in `docker-compose.override.yml`):
+
+```yaml
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.nextpane.rule=Host(`panel.example.com`)
+      - traefik.http.routers.nextpane.entrypoints=websecure
+      - traefik.http.routers.nextpane.tls.certresolver=letsencrypt   # your resolver's name
+      - traefik.http.services.nextpane.loadbalancer.server.port=3000
+```
 
 ---
 

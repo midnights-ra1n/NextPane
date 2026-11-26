@@ -1,4 +1,10 @@
-# NextPane behind Caddy (automatic HTTPS). Set PANEL_DOMAIN, point its DNS here, then: docker compose up -d
+# NextPane panel. Settings come from the shell or a .env file next to this file.
+#
+#   Panel on port 3000 (plain HTTP, put your own reverse proxy in front for HTTPS):
+#     docker compose up -d
+#   Panel + bundled Caddy (automatic HTTPS, needs ports 80/443 and PANEL_DOMAIN pointing here):
+#     PANEL_DOMAIN=panel.example.com NEXTPANE_PORT=127.0.0.1:3000 docker compose --profile caddy up -d
+#
 # First start: docker compose logs nextpane | grep "setup code"
 services:
   nextpane:
@@ -7,14 +13,21 @@ services:
     restart: unless-stopped
     environment:
       NEXTPANE_RELEASE_URL: ${NEXTPANE_RELEASE_URL:-}
+    ports:
+      # "3000" = every interface, "127.0.0.1:3000" = only a proxy on this host can reach it
+      - "${NEXTPANE_PORT:-3000}:3000"
     volumes:
       - nextpane-data:/data
 
   caddy:
     image: caddy:2
+    profiles: [caddy]
     restart: unless-stopped
     ports: ["80:80", "443:443"]
-    command: caddy reverse-proxy --from ${PANEL_DOMAIN:?set PANEL_DOMAIN} --to nextpane:3000
+    environment:
+      PANEL_DOMAIN: ${PANEL_DOMAIN:-}
+    # checked inside the container so that `docker compose up` without the profile needs no domain
+    command: ["sh", "-c", "exec caddy reverse-proxy --from \"$${PANEL_DOMAIN:?set PANEL_DOMAIN}\" --to nextpane:3000"]
     volumes:
       - caddy-data:/data
 
