@@ -26,7 +26,15 @@ pub enum ServerMsg {
     /// Sent once, the first time a host enrolls. The agent stores it and presents it on reconnect.
     Welcome { host_secret: String },
     /// Desired state, sent after every (re)connection.
-    Sync { apps: Vec<AppSpec>, ssh_keys: Vec<String>, metrics_interval: u64, poll_interval: u64 },
+    Sync {
+        apps: Vec<AppSpec>,
+        ssh_keys: Vec<String>,
+        metrics_interval: u64,
+        poll_interval: u64,
+        /// Shared deploy key (OpenSSH private key) used by git for every app without its own key.
+        #[serde(default)]
+        git_key: Option<String>,
+    },
     Cmd { id: u64, cmd: Command },
 }
 

@@ -590,7 +590,7 @@ function specForm(spec, isNew) {
   const el = h('div', { class: 'form' },
     tpl && field('Type', tpl, 'Discord bots need no port: put the token in DISCORD_TOKEN, NextPane then shows the bot, its servers and slash commands.'),
     isNew && field('Name', f.name, 'Lowercase, used for the systemd unit and folders.'),
-    field('Git repository', f.repo, 'Any provider. Private repos: generate a deploy key after creating the app.'),
+    field('Git repository', f.repo, 'Any provider. Private repos: SSH URL (git@…) and the deploy key from Settings added once to your Git account.'),
     field('Branch', f.branch), field('Port', f.port, 'Exported as PORT.'),
     field('Install command', f.install_cmd), field('Build command', f.build_cmd), field('Start command', f.start_cmd),
     field('CPU limit (%)', f.cpu_percent, '100 = one full core.'), field('Memory limit (MB)', f.memory_mb, 'Hard limit, the app is restarted if it exceeds it.'),
@@ -609,7 +609,7 @@ async function newAppDialog(hostId) {
     d.close();
     refreshSide();
     location.hash = `#/apps/${r.id}/settings`;
-  }, 'App created. Add environment variables or a deploy key, then deploy.') }, 'Create app');
+  }, 'App created. Add environment variables, then deploy.') }, 'Create app');
   const d = modal('New app', h('div', { class: 'stack' }, hostSel && field('Host', hostSel), form.el), btn, 'wide');
 }
 
@@ -652,7 +652,7 @@ async function hostPage(id, tab = 'overview') {
     const installed = new Set(host.ssh_keys.map((k) => k.pubkey.trim()));
     const avail = library.filter((k) => !installed.has(k.pubkey.trim()));
     body.append(h('div', { class: 'stack' },
-      h('div', { class: 'section' }, h('div', { class: 's-head' }, h('div', {}, h('h2', {}, 'SSH keys'), h('p', { class: 'muted small' }, `Installed in ~nextpane/.ssh/authorized_keys to log into the host: ssh nextpane@${host.info.ip || host.info.hostname || 'host'}. Git does not use them: private repositories need the app's deploy key (app Settings).`))),
+      h('div', { class: 'section' }, h('div', { class: 's-head' }, h('div', {}, h('h2', {}, 'SSH keys'), h('p', { class: 'muted small' }, `Installed in ~nextpane/.ssh/authorized_keys to log into the host: ssh nextpane@${host.info.ip || host.info.hostname || 'host'}. Git does not use them: private repositories use the deploy key (Settings).`))),
         host.ssh_keys.length ? h('table', {}, h('tbody', {}, host.ssh_keys.map((k) => h('tr', {},
           h('td', {}, h('strong', {}, k.name || 'key')), h('td', { class: 'mono small muted' }, k.pubkey.slice(0, 60) + '…'),
           h('td', { class: 'num' }, h('button', { class: 'btn sm', onclick: async (e) => {
@@ -793,11 +793,11 @@ async function appPage(id, tab = 'deployments') {
   } else if (tab === 'settings') {
     const form = specForm(s, false);
     const save = h('button', { class: 'btn primary', type: 'button', onclick: () => act(save, () => api(`/api/apps/${id}`, { method: 'PUT', body: form.read() }), (r) => r.output || 'Saved').then(refresh) }, 'Save & apply');
-    const keyBox = h('div', {}, app.deploy_key ? code(app.deploy_key) : h('p', { class: 'muted small' }, 'No deploy key yet.'));
+    const keyBox = h('div', {}, app.deploy_key ? code(app.deploy_key) : h('p', { class: 'muted small' }, 'No app key: the shared deploy key is used.'));
     const gen = h('button', { class: 'btn', type: 'button', disabled: !app.online, onclick: () => act(gen, async () => {
       const r = await api(`/api/apps/${id}/deploy-key`, { method: 'POST' });
       keyBox.replaceChildren(code(r.data));
-    }, 'Deploy key ready') }, app.deploy_key ? 'Show key' : 'Generate deploy key');
+    }, 'Key ready') }, app.deploy_key ? 'Show key' : 'Generate a key for this app');
     const { hosts } = await api('/api/hosts');
     const dupHost = select(hosts.map((x) => [String(x.id), `${x.name}${x.id === app.host_id ? ' (this host)' : ''}`]), String(hosts.find((x) => x.id !== app.host_id)?.id ?? app.host_id), 'Target host');
     dupHost.classList.remove('auto');
@@ -825,8 +825,8 @@ async function appPage(id, tab = 'deployments') {
     } }, 'Delete app');
     body.append(h('div', { class: 'stack' },
       section('Build & runtime', null, form.el, [h('span', { class: 'dim small' }, 'Limits and commands apply immediately (the app restarts).'), save]),
-      section('Deploy key', 'For private repositories: an SSH key generated on the host (the private half never leaves it, you never paste a private key). Add the public key below as a read-only deploy key in the repository (GitHub: Settings > Deploy keys; GitLab: Settings > Repository > Deploy keys) and use the SSH clone URL (git@…).', keyBox, [h('span', {}), gen]),
-      section('Duplicate', 'Create the same app (settings, firewall rules and optionally environment variables) on another host, e.g. to scale out or to build a staging copy. Private repos need a deploy key on the new host.',
+      section('App key (optional)', 'Private repositories use the NextPane deploy key (Settings) by default. For an app that must only see its own repository, generate a key on the host (the private half never leaves it) and add it as a read-only deploy key to that repository. It is tried first, then the shared key.', keyBox, [h('span', {}), gen]),
+      section('Duplicate', 'Create the same app (settings, firewall rules and optionally environment variables) on another host, e.g. to scale out or to build a staging copy. Repos read with an app key need a new key on the target host.',
         h('div', { class: 'form' }, field('Target host', dupHost), field('Name', dupName), h('label', { class: 'check full' }, dupEnv, h('span', {}, 'Copy environment variables'))), [h('span', {}), dup]),
       section('Delete app', null, null, [h('span', { class: 'small muted' }, 'This cannot be undone.'), del], 'danger')));
   }
@@ -1017,7 +1017,11 @@ async function activityPage() {
 // ---------- settings ----------
 
 async function settingsPage() {
-  const [sys, { keys }, settings, { keys: library }] = await Promise.all([api('/api/system'), api('/api/enroll-keys'), api('/api/settings'), api('/api/ssh-keys')]);
+  const [sys, { keys }, settings, { keys: library }, gitKey] = await Promise.all([api('/api/system'), api('/api/enroll-keys'), api('/api/settings'), api('/api/ssh-keys'), api('/api/git-key')]);
+  const rotate = h('button', { class: 'btn', type: 'button', onclick: async () => {
+    if (await confirmDialog('Rotate deploy key', 'Creates a new key and sends it to every host. The current key stops working for NextPane: replace it in your Git accounts, then delete the old one there.', 'Rotate'))
+      act(rotate, () => api('/api/git-key/rotate', { method: 'POST' }).then(render), 'New deploy key sent to the hosts');
+  } }, 'Rotate key');
   const libName = h('input', { placeholder: 'laptop' });
   const libKey = h('textarea', { class: 'mono', placeholder: 'ssh-ed25519 AAAA… you@laptop', rows: 3 });
   const libAdd = h('button', { class: 'btn primary', type: 'button', onclick: () => act(libAdd, () => api('/api/ssh-keys', { method: 'POST', body: { name: libName.value, pubkey: libKey.value } }).then(render), 'Key saved') }, 'Save key');
@@ -1073,6 +1077,10 @@ async function settingsPage() {
           const b = e.currentTarget;
           if (await confirmDialog('Revoke key', `Revoke “${k.name}”? New hosts can no longer enroll with it.`, 'Revoke')) act(b, () => api(`/api/enroll-keys/${k.id}`, { method: 'DELETE' }).then(render));
         } }, 'Revoke')))))) : h('div', { class: 's-body muted' }, 'No active keys.')),
+    section('Deploy key', 'One SSH key for every app on every host. Add this public key once to your Git account (GitHub: Settings › SSH and GPG keys; GitLab: Preferences › SSH Keys; Gitea/Forgejo: Settings › SSH / GPG Keys), then use SSH clone URLs (git@…).',
+      h('div', { class: 'stack' }, code(gitKey.public),
+        h('p', { class: 'muted small' }, 'Every host holds the private key, and on a personal account the key can also push to your repositories. Safer: a dedicated Git account with read-only access to the repositories you deploy.')),
+      [h('span', { class: 'dim small' }, 'An app can still use its own key (app Settings).'), rotate]),
     h('div', { class: 'section' }, h('div', { class: 's-head' }, h('div', {}, h('h2', {}, 'SSH key library'), h('p', { class: 'muted small' }, 'Public keys saved once, then added to any host from its SSH keys tab. Forgetting a key here does not remove it from hosts.'))),
       library.length ? h('table', {}, h('tbody', {}, library.map((k) => h('tr', {}, h('td', {}, h('strong', {}, k.name || 'key')), h('td', { class: 'mono small muted' }, k.pubkey.slice(0, 60) + '…'),
         h('td', { class: 'num' }, h('button', { class: 'btn sm', onclick: async (e) => {

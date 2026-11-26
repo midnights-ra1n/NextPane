@@ -19,6 +19,8 @@ pub const HOME: &str = "/var/lib/nextpane";
 const USER: &str = "nextpane";
 const ENV_DIR: &str = "/etc/nextpane/apps";
 const KEEP_RELEASES: usize = 3;
+/// Shared deploy key, relative to HOME.
+const GIT_KEY: &str = ".ssh/nextpane_git";
 const MAX_LOG: usize = 100_000;
 
 /// (output, data) on success, full log on failure.
@@ -132,12 +134,14 @@ fn user_sh(log: &mut String, script: &str, args: &[&str]) -> Result<String, Stri
 
 fn git(app: &str) -> Result<Cmd, String> {
     let mut c = as_user("git")?;
-    let key = app_dir(app).join("deploy_key");
-    if key.exists() {
-        c.env("GIT_SSH_COMMAND", format!("ssh -i {} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new", key.display()));
-    } else {
-        c.env("GIT_SSH_COMMAND", "ssh -o StrictHostKeyChecking=accept-new");
-    }
+    // The app's own key first: if the provider does not know it, ssh falls back to the shared key.
+    let keys: String = [app_dir(app).join("deploy_key"), Path::new(HOME).join(GIT_KEY)]
+        .iter()
+        .filter(|k| k.exists())
+        .map(|k| format!("-i {} ", k.display()))
+        .collect();
+    let only = if keys.is_empty() { "" } else { "-o IdentitiesOnly=yes " };
+    c.env("GIT_SSH_COMMAND", format!("ssh {keys}{only}-o StrictHostKeyChecking=accept-new"));
     Ok(c)
 }
 
@@ -399,27 +403,41 @@ fn deploy_key(log: &mut String, name: &str) -> Result<String, String> {
     user_sh(log, "mkdir -p \"$1\" && { [ -f \"$1/deploy_key\" ] || ssh-keygen -q -t ed25519 -N '' -C \"nextpane@$2\" -f \"$1/deploy_key\"; } && cat \"$1/deploy_key.pub\"", &[&ds, name]).map(|k| k.trim().to_string())
 }
 
-fn authorized_keys(log: &mut String, keys: &[String]) -> Result<(), String> {
-    if let Some(k) = keys.iter().find(|k| !valid_ssh_pubkey(k)) {
-        return Err(format!("invalid public key: {k}"));
-    }
-    let body: String = keys.iter().map(|k| format!("{}\n", k.trim())).collect();
+/// Atomically write `body` to `~/<rel>` (mode 600) as the app user; the content goes through stdin.
+fn user_write(log: &mut String, rel: &str, body: &str) -> Result<(), String> {
     let mut c = as_user("sh")?;
-    c.args(["-c", "umask 077 && mkdir -p ~/.ssh && cat > ~/.ssh/authorized_keys.tmp && mv -f ~/.ssh/authorized_keys.tmp ~/.ssh/authorized_keys"]);
+    c.args(["-c", "umask 077 && mkdir -p ~/.ssh && cat > ~/\"$1.tmp\" && mv -f ~/\"$1.tmp\" ~/\"$1\"", "sh", rel]);
     let mut child = c.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| e.to_string())?;
     child.stdin.take().unwrap().write_all(body.as_bytes()).map_err(|e| e.to_string())?;
     let out = child.wait_with_output().map_err(|e| e.to_string())?;
     log.push_str(&String::from_utf8_lossy(&out.stderr));
     if !out.status.success() {
-        return Err("could not write authorized_keys".into());
+        return Err(format!("could not write ~/{rel}"));
     }
+    Ok(())
+}
+
+fn authorized_keys(log: &mut String, keys: &[String]) -> Result<(), String> {
+    if let Some(k) = keys.iter().find(|k| !valid_ssh_pubkey(k)) {
+        return Err(format!("invalid public key: {k}"));
+    }
+    let body: String = keys.iter().map(|k| format!("{}\n", k.trim())).collect();
+    user_write(log, ".ssh/authorized_keys", &body)?;
     log.push_str(&format!("{} authorized key(s) installed\n", keys.len()));
     Ok(())
 }
 
+fn git_key(key: Option<&str>) -> Result<(), String> {
+    match key {
+        Some(k) if k.starts_with("-----BEGIN OPENSSH PRIVATE KEY-----") => user_write(&mut String::new(), GIT_KEY, k),
+        Some(_) => Err("invalid shared deploy key".into()),
+        None => user_sh(&mut String::new(), "rm -f ~/\"$1\"", &[GIT_KEY]).map(|_| ()),
+    }
+}
+
 /// Desired state after (re)connect: firewall rules are re-applied (iptables/nft rules do not survive
-/// reboots) and SSH keys rewritten.
-pub fn sync(apps: &[AppSpec], ssh_keys: &[String]) {
+/// reboots), SSH keys and the shared deploy key rewritten.
+pub fn sync(apps: &[AppSpec], ssh_keys: &[String], shared_key: Option<&str>) {
     for a in apps.iter().filter(|a| a.validate().is_ok()) {
         if let Err(e) = firewall::apply(&a.name, &a.firewall) {
             eprintln!("{}: firewall: {e}", a.name);
@@ -427,6 +445,9 @@ pub fn sync(apps: &[AppSpec], ssh_keys: &[String]) {
     }
     if let Err(e) = authorized_keys(&mut String::new(), ssh_keys) {
         eprintln!("ssh keys: {e}");
+    }
+    if let Err(e) = git_key(shared_key) {
+        eprintln!("deploy key: {e}");
     }
 }
 

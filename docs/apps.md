@@ -74,23 +74,32 @@ address the agent uses to reach the panel. Open the port in the app's *Firewall*
 
 ## Private repositories
 
-> `Permission denied (publickey)` during `git fetch` means the host has no access to the repository.
-> Keys in the host's **SSH keys** tab are only used to log into the host; git uses the app's deploy key.
-> Never paste a private key into NextPane.
+NextPane has **one deploy key** for every app on every host, added once to your Git account:
 
-Use an SSH **deploy key**, generated on the host (the private key never leaves it):
+1. *Settings › Deploy key*: copy the public key (generated the first time the page opens).
+2. Add it once to your Git account: GitHub *Settings › SSH and GPG keys*, GitLab *Preferences › SSH
+   Keys*, Gitea/Forgejo *Settings › SSH / GPG Keys*. Several providers: add it to each.
+3. Use SSH clone URLs (`git@github.com:org/repo.git`). Nothing else to do per app or per host.
 
-1. *App › Settings › Deploy key › Generate deploy key*.
-2. Copy the public key into your provider as a **read-only deploy key**:
-   GitHub *Settings › Deploy keys*, GitLab *Settings › Repository › Deploy keys*,
-   Gitea/Forgejo *Settings › Deploy keys*.
-3. Use the SSH clone URL (`git@github.com:org/repo.git`).
+The panel keeps the private key encrypted and sends it to the agents
+(`/var/lib/nextpane/.ssh/nextpane_git`). On a personal account the key can also push to your repositories:
+prefer a dedicated Git account (a "machine user") with read-only access to the repositories you deploy.
+*Rotate key* creates a new one and replaces it on every host; then update it in your Git accounts.
+
+> `Permission denied (publickey)` during `git fetch` means the key is not on a Git account that can read
+> the repository. Keys in the host's **SSH keys** tab are only used to log into the host; git does not
+> use them. Never paste a private key into NextPane.
+
+**App key (optional).** For an app that must only see its own repository: *App › Settings › App key ›
+Generate a key for this app*, then add it to that repository as a read-only deploy key (GitHub
+*Settings › Deploy keys*). It is generated on the host and its private half never leaves it. Git tries
+it first, then the shared key.
 
 The first connection accepts the provider's host key (`StrictHostKeyChecking=accept-new`) and pins it in
 `/var/lib/nextpane/.ssh/known_hosts`. Pre-fill that file if you want to pin it yourself.
 
 > HTTPS with a token in the URL (`https://user:token@host/repo.git`) also works, but the token is
-> then stored in the app settings in clear text. Prefer deploy keys.
+> then stored in the app settings in clear text. Prefer the deploy key.
 
 ## SSH key library
 

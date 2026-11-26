@@ -101,12 +101,12 @@ async fn session(server: &str) -> Result<(), Error> {
                 };
                 match serde_json::from_str::<ServerMsg>(&text) {
                     Ok(ServerMsg::Welcome { host_secret }) => save_secret(&host_secret)?,
-                    Ok(ServerMsg::Sync { apps: a, ssh_keys, metrics_interval, poll_interval }) => {
+                    Ok(ServerMsg::Sync { apps: a, ssh_keys, metrics_interval, poll_interval, git_key }) => {
                         apps = a;
                         metrics_tick = interval(Duration::from_secs(metrics_interval.max(2)));
                         poll_tick = interval(Duration::from_secs(poll_interval.max(15)));
                         let a = apps.clone();
-                        spawn_blocking(move || apps::sync(&a, &ssh_keys));
+                        spawn_blocking(move || apps::sync(&a, &ssh_keys, git_key.as_deref()));
                     }
                     Ok(ServerMsg::Cmd { id, cmd }) => {
                         let tx = tx.clone();

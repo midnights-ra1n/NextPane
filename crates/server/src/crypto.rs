@@ -33,6 +33,49 @@ pub fn sha(s: &str) -> String {
     hex::encode(Sha256::digest(s.as_bytes()))
 }
 
+fn put(b: &mut Vec<u8>, d: &[u8]) {
+    b.extend((d.len() as u32).to_be_bytes());
+    b.extend(d);
+}
+
+/// New ed25519 SSH key pair: (private key in OpenSSH format, unencrypted; public key line).
+pub fn ssh_keypair(comment: &str) -> (String, String) {
+    let mut seed = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut seed);
+    let kp = ring::signature::Ed25519KeyPair::from_seed_unchecked(&seed).expect("ed25519 seed");
+    let public = ring::signature::KeyPair::public_key(&kp).as_ref();
+    let mut blob = vec![];
+    put(&mut blob, b"ssh-ed25519");
+    put(&mut blob, public);
+    // openssh-key-v1: https://github.com/openssh/openssh-portable/blob/master/PROTOCOL.key
+    let mut check = [0u8; 4];
+    rand::thread_rng().fill_bytes(&mut check);
+    let mut private = [check, check].concat();
+    put(&mut private, b"ssh-ed25519");
+    put(&mut private, public);
+    put(&mut private, &[&seed[..], public].concat());
+    put(&mut private, comment.as_bytes());
+    for i in 1..=7u8 {
+        if private.len() % 8 == 0 {
+            break;
+        }
+        private.push(i);
+    }
+    let mut file = b"openssh-key-v1\0".to_vec();
+    put(&mut file, b"none");
+    put(&mut file, b"none");
+    put(&mut file, b"");
+    file.extend(1u32.to_be_bytes());
+    put(&mut file, &blob);
+    put(&mut file, &private);
+    let b64 = B64.encode(file);
+    let lines: Vec<&str> = b64.as_bytes().chunks(70).map(|c| std::str::from_utf8(c).unwrap()).collect();
+    (
+        format!("-----BEGIN OPENSSH PRIVATE KEY-----\n{}\n-----END OPENSSH PRIVATE KEY-----\n", lines.join("\n")),
+        format!("ssh-ed25519 {} {comment}", B64.encode(blob)),
+    )
+}
+
 pub fn seal(key: &[u8; 32], plain: &str) -> String {
     let mut nonce = [0u8; 12];
     rand::thread_rng().fill_bytes(&mut nonce);
@@ -64,6 +107,23 @@ pub fn openssl_enc(pass: &str, data: &[u8]) -> String {
 mod tests {
     use super::*;
     use cbc::cipher::BlockDecryptMut;
+
+    #[test]
+    fn ssh_keypair_is_valid_openssh() {
+        let (private, public) = ssh_keypair("nextpane");
+        assert!(private.starts_with("-----BEGIN OPENSSH PRIVATE KEY-----\n") && public.starts_with("ssh-ed25519 "));
+        assert!(nextpane_proto::valid_ssh_pubkey(&public));
+        // When ssh-keygen is available, it must read the key back and derive the same public key.
+        let path = std::env::temp_dir().join(format!("np-test-{}", token()));
+        fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path).unwrap().write_all(private.as_bytes()).unwrap();
+        let out = std::process::Command::new("ssh-keygen").arg("-y").arg("-f").arg(&path).output();
+        let _ = fs::remove_file(&path);
+        if let Ok(o) = out {
+            assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+            let derived = String::from_utf8_lossy(&o.stdout);
+            assert_eq!(derived.split_whitespace().nth(1), public.split_whitespace().nth(1));
+        }
+    }
 
     #[test]
     fn seal_roundtrip() {

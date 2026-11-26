@@ -68,7 +68,14 @@ pub fn sync_msg(st: &St, host_id: i64) -> Result<ServerMsg, ApiErr> {
     let db = st.db.lock().unwrap();
     let apps = db.prepare("SELECT spec FROM apps WHERE host_id=?1")?.query_map([host_id], |r| r.get::<_, String>(0))?.filter_map(|s| serde_json::from_str::<AppSpec>(&s.ok()?).ok()).collect();
     let ssh_keys = db.prepare("SELECT pubkey FROM ssh_keys WHERE host_id=?1")?.query_map([host_id], |r| r.get(0))?.collect::<Result<_, _>>()?;
-    Ok(ServerMsg::Sync { apps, ssh_keys, metrics_interval: st.cfg.metrics_interval, poll_interval: st.cfg.poll_interval })
+    let git_key = crate::api::load_git_key(&db, &st.key).map(|k| k.1);
+    Ok(ServerMsg::Sync { apps, ssh_keys, metrics_interval: st.cfg.metrics_interval, poll_interval: st.cfg.poll_interval, git_key })
+}
+
+/// Push the desired state to every connected host.
+pub fn resync_all(st: &St) {
+    let ids: Vec<i64> = st.live.lock().unwrap().keys().copied().collect();
+    ids.into_iter().for_each(|id| resync(st, id));
 }
 
 /// Push the desired state again (after apps or keys changed). No-op when the host is offline.

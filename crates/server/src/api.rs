@@ -171,6 +171,38 @@ pub async fn delete_ssh_key(State(st): State<St>, _: User, Path((id, kid)): Path
     ok()
 }
 
+/// Shared deploy key: (public key line, private key), if generated.
+pub(crate) fn load_git_key(db: &rusqlite::Connection, key: &[u8; 32]) -> Option<(String, String)> {
+    let v: String = db.query_row("SELECT value FROM settings WHERE key='git_key'", [], |r| r.get(0)).ok()?;
+    let v: Value = serde_json::from_str(&v).ok()?;
+    Some((v["public"].as_str()?.to_string(), crypto::open(key, v["private"].as_str()?)?))
+}
+
+/// One SSH key for every app on every host: generated here on first use, sent to the agents.
+fn new_git_key(st: &St, action: &str) -> R {
+    let (private, public) = crypto::ssh_keypair("nextpane-deploy");
+    {
+        let db = st.db.lock().unwrap();
+        let v = json!({ "public": public, "private": crypto::seal(&st.key, &private) }).to_string();
+        db.execute("INSERT INTO settings (key, value) VALUES ('git_key', ?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [v])?;
+        audit(&db, action, &public);
+    }
+    hub::resync_all(st);
+    Ok(Json(json!({ "public": public })))
+}
+
+pub async fn get_git_key(State(st): State<St>, _: User) -> R {
+    let existing = load_git_key(&st.db.lock().unwrap(), &st.key);
+    match existing {
+        Some((public, _)) => Ok(Json(json!({ "public": public }))),
+        None => new_git_key(&st, "git_key.create"),
+    }
+}
+
+pub async fn rotate_git_key(State(st): State<St>, _: User) -> R {
+    new_git_key(&st, "git_key.rotate")
+}
+
 /// Key library: public keys saved once and added to any host in one click.
 pub async fn saved_keys(State(st): State<St>, _: User) -> R {
     let db = st.db.lock().unwrap();
@@ -349,11 +381,11 @@ pub fn start_deploy(st: &St, app_id: i64, sha: Option<String>, trigger: &str) ->
 /// Explain the usual git access errors (host SSH keys are often mistaken for git credentials).
 fn git_hint(log: &str) -> &'static str {
     if log.contains("Permission denied (publickey)") {
-        "\nhint: the host cannot read this repository. Open the app's Settings > Deploy key, generate the key and add it \
-to the repository as a read-only deploy key (GitHub: Settings > Deploy keys; GitLab: Settings > Repository > Deploy keys). \
+        "\nhint: the host cannot read this repository. Add the NextPane deploy key (Settings > Deploy key) once to your Git \
+account (GitHub: Settings > SSH and GPG keys; GitLab: Preferences > SSH Keys; Gitea/Forgejo: Settings > SSH / GPG Keys). \
 Never paste a private key into NextPane. Keys in the host's \"SSH keys\" tab only allow logging into the host, git does not use them.\n"
     } else if log.contains("could not read Username") {
-        "\nhint: private repository over HTTPS. Use the SSH clone URL (git@…) and add the app's deploy key (Settings > Deploy key) to the repository.\n"
+        "\nhint: private repository over HTTPS. Use the SSH clone URL (git@…) and add the NextPane deploy key (Settings > Deploy key) to your Git account.\n"
     } else {
         ""
     }

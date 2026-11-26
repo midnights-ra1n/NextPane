@@ -183,6 +183,8 @@ async fn main() {
         .route("/api/hosts", get(api::hosts))
         .route("/api/hosts/{id}", get(api::host).patch(api::patch_host).delete(api::delete_host))
         .route("/api/hosts/{id}/update", post(api::update_agent))
+        .route("/api/git-key", get(api::get_git_key))
+        .route("/api/git-key/rotate", post(api::rotate_git_key))
         .route("/api/ssh-keys", get(api::saved_keys).post(api::save_key))
         .route("/api/ssh-keys/{id}", delete(api::forget_key))
         .route("/api/hosts/{id}/ssh-keys", post(api::add_ssh_key))
