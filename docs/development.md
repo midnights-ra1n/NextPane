@@ -52,18 +52,19 @@ Branches: work happens on `dev` (and feature branches); **`stable`** is the rele
 | Event | Workflow | Result |
 |---|---|---|
 | Any commit, any branch except `stable`, pull requests | `ci.yml` | clippy, tests, UI and shell syntax checks |
-| Push to `stable` | `stable.yml` | CI, then static binaries + `.deb` + `.rpm` (x86_64, aarch64) as workflow artifacts, and image `ghcr.io/<owner>/nextpane:stable` |
-| Push to `stable` with a **new** version in `Cargo.toml` | `stable.yml` | all of the above, plus tag `vX.Y.Z`, a GitHub release with `latest.json`, and images `:vX.Y.Z` + `:latest` |
+| Push to `stable` | `stable.yml` | CI, static binaries + `.deb` + `.rpm` (x86_64, aarch64), tag `vX.Y.Z`, a GitHub release with `latest.json`, and images `:stable`, `:vX.Y.Z`, `:latest` |
+
+Every push to `stable` publishes a release. The version is the one in the root `Cargo.toml`
+(`[workspace.package]`) when it is newer than the last release, otherwise the last release's patch + 1
+(`v0.1.0` released → `v0.1.1`, `v0.1.2`…). It is written into the binaries and packages at build time;
+the repository's `Cargo.toml` is not modified.
 
 To ship a version:
 
-1. Bump `version` in the root `Cargo.toml` (`[workspace.package]`) on `dev`.
-2. Merge `dev` into `stable` (pull request or `git push origin dev:stable`).
+1. Merge `dev` into `stable` (pull request or `git push origin dev:stable`).
+2. For a minor or major version, first set `version` in the root `Cargo.toml` (e.g. `0.2.0`) on `dev`.
 3. Panels whose `NEXTPANE_RELEASE_URL` points at the repository's releases offer the update to the
    server and the agents.
-
-A push to `stable` that keeps an already released version only rebuilds and refreshes the `:stable`
-image; nothing is published to the release channel.
 
 ## Code map
 

@@ -1,10 +1,10 @@
 # Every push to "stable":
 #   1. runs the CI checks (ci.yml),
 #   2. builds static binaries, .deb and .rpm for x86_64 and aarch64,
-#   3. pushes the Docker image ghcr.io/<owner>/nextpane:stable,
-#   4. if the workspace version (root Cargo.toml) has no release yet: creates tag vX.Y.Z, publishes the
-#      GitHub release with latest.json, and tags the image :vX.Y.Z and :latest.
-# Panels and agents update from these releases. To ship a new version: bump the version, merge into stable.
+#   3. publishes a release: tag vX.Y.Z, GitHub release with latest.json, images :stable, :vX.Y.Z, :latest.
+# Version: the one in the root Cargo.toml if it is newer than the last release, else the last release's
+# patch + 1 (0.1.0 released -> 0.1.1, 0.1.2...). Bump Cargo.toml by hand only for a minor/major version.
+# Panels and agents update from these releases.
 name: stable
 on:
   push:
@@ -27,7 +27,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.v.outputs.version }}
-      release: ${{ steps.v.outputs.release }}
     steps:
       - uses: actions/checkout@v4
       - id: v
@@ -36,14 +35,13 @@ jobs:
         run: |
           V=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
           [ -n "$V" ] || { echo "no version in Cargo.toml"; exit 1; }
-          echo "version=$V" >> "$GITHUB_OUTPUT"
-          if gh release view "v$V" >/dev/null 2>&1; then
-            echo "release=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::v$V is already released: building only. Bump the version in Cargo.toml to publish a release."
-          else
-            echo "release=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::v$V will be released"
+          LAST=$(gh release list --limit 100 --json tagName --jq '.[].tagName' | sed -n 's/^v\([0-9]*\.[0-9]*\.[0-9]*\)$/\1/p' | sort -V | tail -n1)
+          # Cargo.toml version already released (or older): next patch after the last release.
+          if [ -n "$LAST" ] && [ "$(printf '%s\n%s\n' "$V" "$LAST" | sort -V | tail -n1)" = "$LAST" ]; then
+            V="${LAST%.*}.$(( ${LAST##*.} + 1 ))"
           fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "::notice::v$V will be released"
 
   build:
     needs: [ci, version]
@@ -66,6 +64,9 @@ jobs:
         run: |
           pip install ziglang==0.13.0
           cargo install --locked cargo-zigbuild cargo-deb cargo-generate-rpm
+      - name: Set version
+        # Baked into the binaries and packages; the agent and server compare it to latest.json.
+        run: sed -i '0,/^version = .*/s//version = "'"$V"'"/' Cargo.toml && grep -m1 '^version' Cargo.toml
       - name: Build
         run: cargo zigbuild --release --target "$TARGET" -p nextpane-agent -p nextpane-server
       - name: Package
@@ -85,7 +86,6 @@ jobs:
 
   publish:
     needs: [version, build]
-    if: needs.version.outputs.release == 'true'
     runs-on: ubuntu-latest
     env:
       V: ${{ needs.version.outputs.version }}
@@ -136,9 +136,7 @@ jobs:
           cp "dist/nextpane-server-$V-aarch64" bin/nextpane-server-arm64
           chmod +x bin/*
           IMG="ghcr.io/${GITHUB_REPOSITORY,,}"
-          TAGS="$IMG:stable"
-          if [ "${{ needs.version.outputs.release }}" = true ]; then TAGS="$TAGS,$IMG:v$V,$IMG:latest"; fi
-          echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
+          echo "tags=$IMG:stable,$IMG:v$V,$IMG:latest" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
