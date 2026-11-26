@@ -41,6 +41,7 @@ A deployment runs on the host, step by step, and its full log is kept in the pan
    The start column applies when `package.json` has a `start` script; otherwise see *Frameworks*.
 4. **Build**. Install and build run in a transient systemd unit (`nextpane-build-<app>`) as
    `nextpane`, **with the app's environment variables and resource limits**.
+   systemd writes the step's output to `/run/nextpane-agent/<app>.log`, copied into the deployment log.
 
    If systemd cannot start a build step because it is reloading (typically while a package update
    finishes), the step is retried up to 3 times. The first check for new commits happens one poll

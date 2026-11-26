@@ -287,26 +287,34 @@ fn install_unit(log: &mut String, spec: &AppSpec, dir: &Path) -> Result<(), Stri
 }
 
 /// Install/build steps run in a transient systemd unit: as the app user, with the app's env and limits,
-/// and accounted outside the agent's own cgroup.
+/// and accounted outside the agent's own cgroup. systemd writes the output to a file: `--pipe` would pass
+/// our pipes to PID 1 over D-Bus, which SELinux can refuse ("Connection reset by peer" on RHEL).
 fn build_step(log: &mut String, spec: &AppSpec, rel: &Path, cmd: &str) -> Result<(), String> {
     log.push_str(&format!("\n$ {cmd}\n"));
+    let dir = Path::new("/run/nextpane-agent"); // root-only tmpfs, where PID 1 writes files anyway
+    fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let out = dir.join(format!("{}.log", spec.name));
     for attempt in 1.. {
+        let _ = fs::remove_file(&out); // file: does not truncate
         let mut c = Cmd::new("systemd-run");
-        c.args(["--wait", "--pipe", "--collect", "--quiet"])
+        c.args(["--wait", "--collect", "--quiet"])
             .arg(format!("--unit=nextpane-build-{}", spec.name))
             .arg(format!("--uid={USER}"))
             .arg(format!("--gid={USER}"))
             .args(["-p", &format!("WorkingDirectory={}", rel.display())])
             .args(["-p", &format!("EnvironmentFile=-{}", env_path(&spec.name))])
+            .args(["-p", &format!("StandardOutput=file:{}", out.display()), "-p", "StandardError=inherit"])
             .args(["-E", &format!("HOME={HOME}"), "-E", &format!("PATH={}", path_var())]);
         for l in limits(spec) {
             c.args(["-p", &l]);
         }
-        let mut out = String::new();
-        let r = run(&mut out, c.args(["/bin/sh", "-c", cmd])).map(|_| ());
-        log.push_str(&out);
+        let mut err = String::new();
+        let r = run(&mut err, c.args(["/bin/sh", "-c", cmd])).map(|_| ());
+        log.push_str(&String::from_utf8_lossy(&fs::read(&out).unwrap_or_default()));
+        log.push_str(&err);
+        let _ = fs::remove_file(&out);
         // The unit never started (e.g. systemd was reloading during a package update): safe to retry.
-        if r.is_err() && out.contains("Failed to start transient service unit") && attempt < 4 {
+        if r.is_err() && err.contains("Failed to start transient service unit") && attempt < 4 {
             log.push_str("systemd was busy, retrying in 5s\n");
             std::thread::sleep(std::time::Duration::from_secs(5));
             continue;
