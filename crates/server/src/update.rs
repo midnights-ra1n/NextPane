@@ -60,6 +60,7 @@ pub async fn system(State(st): State<St>, _: User) -> Json<Value> {
         "latest": latest,
         "update_available": latest.as_deref().is_some_and(|l| is_newer(l, VERSION)),
         "error": m.err().map(|e| e.1),
+        "tls_pin": st.tls_pin.as_ref().map(|p| json!({ "cert": p.cert, "spki": p.spki })),
     }))
 }
 

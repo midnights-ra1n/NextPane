@@ -48,8 +48,8 @@ pub fn verify_password(st: &St, user: i64, pw: &str) -> bool {
 fn session_response(st: &St, headers: &HeaderMap, user: i64) -> Response {
     let t = crypto::token();
     st.db.lock().unwrap().execute("INSERT INTO sessions (token_hash, user_id, expires) VALUES (?1, ?2, ?3)", params![crypto::sha(&t), user, now() + SESSION_TTL]).ok();
-    // Secure when the panel is reached through HTTPS (TLS is terminated by the reverse proxy).
-    let https = headers.get("x-forwarded-proto").is_some_and(|v| v == "https");
+    // Secure when the panel is reached through HTTPS (built-in TLS or a reverse proxy).
+    let https = st.cfg.tls || headers.get("x-forwarded-proto").is_some_and(|v| v == "https");
     let c = format!("{COOKIE}={t}; HttpOnly; SameSite=Strict; Path=/; Max-Age={SESSION_TTL}{}", if https { "; Secure" } else { "" });
     ([(header::SET_COOKIE, c)], Json(json!({ "ok": true }))).into_response()
 }

@@ -39,7 +39,7 @@ gives you a black, quiet dashboard to see what each app costs the host.
 
 ```mermaid
 flowchart LR
-  B[Browser] -- HTTPS --> P[Reverse proxy<br/>Caddy / nginx]
+  B[Browser] -- HTTPS --> P[Reverse proxy, optional<br/>Caddy / nginx / Traefik]
   P --> S[nextpane-server<br/>UI + API + SQLite]
   A1[nextpane-agent<br/>host 1] -- "WebSocket (outbound)" --> P
   A2[nextpane-agent<br/>host 2] -- "WebSocket (outbound)" --> P
@@ -61,14 +61,16 @@ flowchart LR
 
 ```sh
 git clone https://github.com/midnights-ra1n/NextPane && cd NextPane
-docker compose up -d                       # panel on port 3000, behind your own reverse proxy
+docker compose up -d                       # panel on http://<host>:3000, behind your own reverse proxy
+# or, no proxy at all, HTTPS on https://<ip>:3000 (self-signed certificate pinned by the agents):
+# NEXTPANE_TLS=on docker compose up -d
 # or, with the bundled Caddy and automatic HTTPS:
 # PANEL_DOMAIN=panel.example.com NEXTPANE_PORT=127.0.0.1:3000 docker compose --profile caddy up -d
 docker compose logs nextpane | grep "setup code"
 ```
 
-Open the panel (`https://panel.example.com`, or `http://<host>:3000`), enter the setup code and create
-the admin account. Every setup (existing proxy, other host, Traefik…) is in [Installation](docs/installation.md#docker-compose).
+Open the panel (`https://panel.example.com`, `https://<ip>:3000` or `http://<host>:3000`), enter the setup code and create
+the admin account. Every setup (existing proxy, other host, Traefik, direct access by IP…) is in [Installation](docs/installation.md#docker-compose).
 Debian/Ubuntu/RHEL packages are described in [Installation](docs/installation.md).
 
 **2. Add a host.** *Hosts › Add host* creates an enrollment key and gives you the command to run on the server:

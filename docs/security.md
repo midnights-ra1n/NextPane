@@ -40,9 +40,12 @@ Inside the agent, every filesystem write under `/var/lib/nextpane` (owned by `ne
 
 ## Transport
 
-Run the panel behind TLS (see the reverse proxy section of [Installation](installation.md)) and use
-`wss://` for agents: env vars travel to the hosts over that channel. The agent verifies the server
-certificate against the Mozilla root store bundled in the binary.
+Use TLS between agents and the panel (`wss://`): env vars travel to the hosts over that channel.
+Either a reverse proxy terminates it, or the panel serves HTTPS itself (`NEXTPANE_TLS=on`, see
+[Installation](installation.md#without-a-reverse-proxy-access-by-ip)). The agent verifies the server
+certificate against the Mozilla root store bundled in the binary, or, when `NEXTPANE_FINGERPRINT`
+is set, accepts only the certificate with that SHA-256 (self-signed panel). Plain `ws://` is
+accepted for trusted networks but sends everything in clear.
 
 ## Input validation
 
@@ -72,7 +75,7 @@ package name before installing it.
 
 ## Hardening checklist
 
-- [ ] Panel behind HTTPS, `NEXTPANE_LISTEN=127.0.0.1:3000`.
+- [ ] Panel over HTTPS: behind a proxy with `NEXTPANE_LISTEN=127.0.0.1:3000`, or `NEXTPANE_TLS=on`.
 - [ ] Restrict access to the panel (VPN, IP allow-list in the proxy) if possible.
 - [ ] Revoke enrollment keys after a rollout.
 - [ ] Back up `nextpane.db` + `secret.key`, encrypted.

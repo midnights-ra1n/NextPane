@@ -3,6 +3,9 @@
 #
 #   curl -fsSL https://panel.example.com/install.sh | sudo NEXTPANE_SERVER=wss://panel.example.com/agent/ws NEXTPANE_TOKEN=npk_... sh
 #
+# Panel with a self-signed certificate (NEXTPANE_TLS=on), reached by IP; both pins are shown by the panel:
+#   curl -fsSLk --pinnedpubkey sha256//<spki> https://203.0.113.10:3000/install.sh | sudo NEXTPANE_SERVER=wss://203.0.113.10:3000/agent/ws NEXTPANE_FINGERPRINT=<sha256> NEXTPANE_TOKEN=npk_... sh
+#
 # Optional: NEXTPANE_VERSION=x.y.z (default: latest), NEXTPANE_METHOD=package|binary (default: package when apt/dnf/yum exist).
 # Every download is checked against the sha256 published in the release manifest.
 set -eu
@@ -10,6 +13,7 @@ set -eu
 RELEASE_URL="${NEXTPANE_RELEASE_URL:-__RELEASE_URL__}"
 SERVER="${NEXTPANE_SERVER:-}"
 TOKEN="${NEXTPANE_TOKEN:-}"
+FINGERPRINT="${NEXTPANE_FINGERPRINT:-}"
 VERSION="${NEXTPANE_VERSION:-}"
 METHOD="${NEXTPANE_METHOD:-package}"
 
@@ -47,7 +51,7 @@ fetch() {
 mkdir -p /etc/nextpane
 if ! grep -Eq '^NEXTPANE_SERVER=.+' /etc/nextpane/agent.env 2>/dev/null; then
   umask 077
-  printf 'NEXTPANE_SERVER=%s\nNEXTPANE_TOKEN=%s\n' "$SERVER" "$TOKEN" > /etc/nextpane/agent.env
+  printf 'NEXTPANE_SERVER=%s\nNEXTPANE_TOKEN=%s\nNEXTPANE_FINGERPRINT=%s\n' "$SERVER" "$TOKEN" "$FINGERPRINT" > /etc/nextpane/agent.env
   umask 022
 fi
 

@@ -50,6 +50,7 @@ Settings are read from the shell or from a `.env` file next to `docker-compose.y
 |---|---|---|
 | `NEXTPANE_PORT` | `3000` | Published port. `3000` listens on every interface, `127.0.0.1:3000` only on localhost (use it when the proxy runs on the same host), `8080` changes the port. |
 | `NEXTPANE_RELEASE_URL` | *(empty)* | See [Configuration](configuration.md). Enables update checks and `/install.sh`. |
+| `NEXTPANE_TLS` | `off` | `on`: the panel serves HTTPS itself on port 3000, no proxy needed (setup C). |
 | `PANEL_DOMAIN` | — | Only with the `caddy` profile: domain served over HTTPS. |
 
 Example `.env`:
@@ -107,8 +108,19 @@ Point the DNS of `PANEL_DOMAIN` to the host and open ports 80 and 443: Caddy obt
 Let's Encrypt certificate itself. Always pass `--profile caddy` (or set `COMPOSE_PROFILES=caddy`
 in `.env`), including for `pull`, `up` and `down`.
 
-**Agents** connect to `wss://<domain>/agent/ws` behind HTTPS, or `ws://<host>:3000/agent/ws` on a
-trusted network without TLS.
+**C. Panel alone with its own HTTPS, reached by IP** (no proxy, no domain)
+
+```sh
+NEXTPANE_TLS=on docker compose up -d
+docker compose logs nextpane | grep -E "setup code|FINGERPRINT"
+```
+
+The panel serves `https://<ip>:3000` with a self-signed certificate, see
+[Without a reverse proxy](#without-a-reverse-proxy-access-by-ip). Do not combine it with
+`--profile caddy` (Caddy talks plain HTTP to the panel).
+
+**Agents** connect to `wss://<domain>/agent/ws` behind a proxy, `wss://<ip>:3000/agent/ws` in
+setup C, or `ws://<ip>:3000/agent/ws` on a trusted network without TLS.
 
 **Update:** `docker compose pull && docker compose up -d` (add `--profile caddy` for setup B).
 **Backup:** `docker compose stop nextpane`, then copy the `nextpane-data` volume
@@ -148,10 +160,48 @@ On first start the server prints a one-time **setup code** in its logs. Open the
 code, choose a username and a password (10+ characters). The code is required so that nobody who
 reaches the panel before you can claim it.
 
+### Without a reverse proxy (access by IP)
+
+A reverse proxy is optional. Browsers and agents can reach the panel directly at
+`<ip>:3000`, in one of three ways:
+
+| `NEXTPANE_TLS` | Panel URL | Agent URL | Use |
+|---|---|---|---|
+| `on`, no certificate files | `https://<ip>:3000` | `wss://<ip>:3000/agent/ws` + `NEXTPANE_FINGERPRINT` | **Recommended without a proxy.** The panel creates a self-signed certificate (`tls.crt`/`tls.key` in the data directory) once. |
+| `on` + `NEXTPANE_TLS_CERT` / `NEXTPANE_TLS_KEY` | `https://<name>:3000` | `wss://<name>:3000/agent/ws` | You already have a certificate (certbot, internal CA, IP certificate). |
+| `off` (default) | `http://<ip>:3000` | `ws://<ip>:3000/agent/ws` | Trusted private network or VPN only: passwords, enrollment keys and environment variables travel **unencrypted**. |
+
+**Self-signed certificate.** Nothing is signed by a public authority, so trust works by
+**pinning**: at startup the panel logs the certificate fingerprints
+
+```
+Self-signed certificate. Agents: NEXTPANE_FINGERPRINT=19073b31…  curl: --pinnedpubkey sha256//tHAy0Bg…=
+```
+
+- The **browser** shows a warning the first time: compare the certificate's SHA-256 shown by the
+  browser with `NEXTPANE_FINGERPRINT` from the logs, then accept it.
+- **Hosts › Add host** then generates commands that already contain both pins:
+
+  ```sh
+  curl -fsSLk --pinnedpubkey sha256//<spki> https://203.0.113.10:3000/install.sh \
+    | sudo NEXTPANE_SERVER=wss://203.0.113.10:3000/agent/ws NEXTPANE_FINGERPRINT=<sha256> NEXTPANE_TOKEN=npk_… sh
+  ```
+
+  `-k` only skips the authority check: `--pinnedpubkey` still makes curl refuse any other key, and
+  the agent refuses any certificate whose SHA-256 differs from `NEXTPANE_FINGERPRINT`. With Ansible,
+  set `nextpane_server_fingerprint` (see [Ansible](ansible.md)).
+- Keep `tls.key` and back it up with the data directory: a new certificate means a new fingerprint
+  to update in `/etc/nextpane/agent.env` on every host. Deleting `tls.crt`/`tls.key` generates a new one.
+
+**Own certificate.** Point `NEXTPANE_TLS_CERT` (full chain) and `NEXTPANE_TLS_KEY` to PEM files
+readable by the `nextpane-server` user (in Docker: mount them, e.g. `- /etc/letsencrypt:/etc/letsencrypt:ro`).
+No fingerprint is needed: agents check it against public authorities. The certificate is read at
+startup, so restart the panel after a renewal (certbot: `--deploy-hook "systemctl restart nextpane-server"`).
+
 ### Reverse proxy (HTTPS)
 
-The panel listens on plain HTTP (`NEXTPANE_LISTEN`, default `0.0.0.0:3000`). Put a TLS reverse proxy
-in front of it: browsers get HTTPS and agents get `wss://`. The proxy must pass WebSocket upgrades
+With `NEXTPANE_TLS=off`, the panel listens on plain HTTP (`NEXTPANE_LISTEN`, default `0.0.0.0:3000`)
+and a TLS reverse proxy can sit in front of it: browsers get HTTPS and agents get `wss://`. The proxy must pass WebSocket upgrades
 for `/agent/ws` and set `X-Forwarded-Proto` (used to mark the session cookie `Secure`).
 
 **Caddy**

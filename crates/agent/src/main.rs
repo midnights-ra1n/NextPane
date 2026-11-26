@@ -3,13 +3,14 @@
 mod apps;
 mod firewall;
 mod metrics;
+mod pinned;
 mod update;
 
 use futures_util::{SinkExt, StreamExt};
 use nextpane_proto::{AgentMsg, AppSpec, HostInfo, ServerMsg};
 use std::{fs, io::Write, os::unix::fs::OpenOptionsExt, process::Command, time::{Duration, Instant}};
 use tokio::{sync::mpsc, task::spawn_blocking, time::interval};
-use tokio_tungstenite::{connect_async, tungstenite::{client::IntoClientRequest, Message}};
+use tokio_tungstenite::{connect_async_tls_with_config, tungstenite::{client::IntoClientRequest, Message}, Connector};
 
 /// Root-only agent state (host secret, firewall state, update downloads).
 pub const STATE: &str = "/var/lib/nextpane-agent";
@@ -65,7 +66,9 @@ async fn session(server: &str) -> Result<(), Error> {
     if let Ok(s) = fs::read_to_string(format!("{STATE}/host.secret")) {
         h.insert("x-host-secret", s.trim().parse()?);
     }
-    let (ws, _) = connect_async(req).await?;
+    let fp = std::env::var("NEXTPANE_FINGERPRINT").unwrap_or_default().replace(':', "").to_ascii_lowercase();
+    let connector = (!fp.trim().is_empty()).then(|| Connector::Rustls(pinned::config(fp.trim())));
+    let (ws, _) = connect_async_tls_with_config(req, None, false, connector).await?;
     eprintln!("connected to {server}");
     let (mut sink, mut stream) = ws.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<AgentMsg>();

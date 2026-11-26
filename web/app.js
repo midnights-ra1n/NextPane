@@ -486,16 +486,21 @@ async function addHostDialog() {
   const name = h('input', { placeholder: 'production', value: 'default' });
   const out = h('div', { class: 'stack' });
   const create = h('button', { class: 'btn primary', type: 'button', onclick: () => act(create, async () => {
-    const { key } = await api('/api/enroll-keys', { method: 'POST', body: { name: name.value } });
+    const [{ key }, sys] = await Promise.all([api('/api/enroll-keys', { method: 'POST', body: { name: name.value } }), api('/api/system')]);
+    const pin = location.protocol === 'https:' && sys.tls_pin;
     create.remove();
     out.replaceChildren(
       h('p', { class: 'muted small' }, 'This key is shown only once. It can enroll any number of hosts; revoke it in Settings when done.'),
       h('h3', {}, 'One-line install (Debian, Ubuntu, RHEL, Alma, Rocky…)'),
-      code(`curl -fsSL ${location.origin}/install.sh | sudo NEXTPANE_SERVER=${wsOrigin()}/agent/ws NEXTPANE_TOKEN=${key} sh`),
+      pin
+        ? code(`curl -fsSLk --pinnedpubkey sha256//${pin.spki} ${location.origin}/install.sh | sudo NEXTPANE_SERVER=${wsOrigin()}/agent/ws NEXTPANE_FINGERPRINT=${pin.cert} NEXTPANE_TOKEN=${key} sh`)
+        : code(`curl -fsSL ${location.origin}/install.sh | sudo NEXTPANE_SERVER=${wsOrigin()}/agent/ws NEXTPANE_TOKEN=${key} sh`),
+      pin && h('p', { class: 'dim small' }, 'The panel uses a self-signed certificate: the agent and curl trust only its fingerprint, shown in the panel logs at startup.'),
+      location.protocol === 'http:' && h('p', { class: 'dim small' }, 'Plain HTTP: the token and environment variables travel unencrypted. Use only on a trusted network, or enable NEXTPANE_TLS.'),
       h('h3', {}, 'Ansible (group_vars)'),
-      code(`nextpane_server_url: "${wsOrigin()}/agent/ws"\nnextpane_enroll_token: "${key}"`),
+      code(`nextpane_server_url: "${wsOrigin()}/agent/ws"\nnextpane_enroll_token: "${key}"${pin ? `\nnextpane_server_fingerprint: "${pin.cert}"` : ''}`),
       h('h3', {}, 'Manual install: /etc/nextpane/agent.env'),
-      code(`NEXTPANE_SERVER=${wsOrigin()}/agent/ws\nNEXTPANE_TOKEN=${key}`),
+      code(`NEXTPANE_SERVER=${wsOrigin()}/agent/ws\nNEXTPANE_TOKEN=${key}${pin ? `\nNEXTPANE_FINGERPRINT=${pin.cert}` : ''}`),
       h('p', { class: 'dim small' }, 'The host appears in the sidebar as soon as the agent connects.'));
   }) }, 'Create enrollment key');
   modal('Add a host', h('div', { class: 'stack' }, h('p', { class: 'muted' }, 'The agent opens one outbound WebSocket to this panel. No inbound port is needed on the host.'), field('Key name', name), out), create);

@@ -6,6 +6,8 @@ nextpane_state: present
 nextpane_server_url: ""            # e.g. wss://panel.example.com/agent/ws
 # Enrollment key created in the panel (Settings > Enrollment keys). Keep it in Ansible Vault.
 nextpane_enroll_token: ""
+# Only for a panel with a self-signed certificate (NEXTPANE_TLS=on, no certificate files): its sha256.
+nextpane_server_fingerprint: ""
 # Where releases are published.
 nextpane_release_url: ""           # e.g. https://github.com/midnights-ra1n/NextPane/releases
 # "latest" or an exact version such as "0.2.0".

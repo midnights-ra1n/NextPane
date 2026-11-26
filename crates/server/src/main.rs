@@ -7,6 +7,7 @@ mod db;
 mod discord;
 mod hub;
 mod notify;
+mod tls;
 mod update;
 
 use axum::{
@@ -37,6 +38,8 @@ pub struct Config {
     pub install: String,
     pub metrics_interval: u64,
     pub poll_interval: u64,
+    /// HTTPS served by the panel itself (NEXTPANE_TLS).
+    pub tls: bool,
 }
 
 pub struct Live {
@@ -65,6 +68,8 @@ pub struct Ctx {
     pub setup_code: Mutex<Option<String>>,
     /// Hosts we sent a "host_offline" notification for (so we announce when they come back).
     pub offline_notified: Mutex<std::collections::HashSet<i64>>,
+    /// Set when the panel uses its self-signed certificate.
+    pub tls_pin: Option<tls::Pin>,
 }
 pub type St = Arc<Ctx>;
 
@@ -124,6 +129,7 @@ async fn main() {
         install: env("NEXTPANE_INSTALL", detect_install()),
         metrics_interval: env("NEXTPANE_METRICS_INTERVAL", "10").parse().unwrap_or(10),
         poll_interval: env("NEXTPANE_POLL_INTERVAL", "60").parse().unwrap_or(60),
+        tls: false,
     };
     std::fs::create_dir_all(&cfg.data_dir).expect("cannot create data dir");
     let conn = db::open(&cfg.data_dir.join("nextpane.db")).expect("cannot open database");
@@ -135,6 +141,23 @@ async fn main() {
         println!("\n  No admin account yet. Open the panel and use this setup code: {c}\n");
         c
     });
+
+    let (cert, key_file) = (env("NEXTPANE_TLS_CERT", ""), env("NEXTPANE_TLS_KEY", ""));
+    let (tls_cfg, tls_pin) = match env("NEXTPANE_TLS", if cert.is_empty() { "off" } else { "on" }).as_str() {
+        "off" => (None, None),
+        "on" | "self-signed" => {
+            if cert.is_empty() != key_file.is_empty() {
+                panic!("set both NEXTPANE_TLS_CERT and NEXTPANE_TLS_KEY");
+            }
+            let (c, p) = tls::load(&cfg.data_dir, &cert, &key_file).unwrap_or_else(|e| panic!("TLS: {e}"));
+            if let Some(p) = &p {
+                println!("  Self-signed certificate. Agents: NEXTPANE_FINGERPRINT={}  curl: --pinnedpubkey sha256//{}", p.cert, p.spki);
+            }
+            (Some(c), p)
+        }
+        v => panic!("NEXTPANE_TLS must be off, on or self-signed, not {v:?}"),
+    };
+    let cfg = Config { tls: tls_cfg.is_some(), ..cfg };
 
     let listen = cfg.listen;
     let st: St = Arc::new(Ctx {
@@ -148,6 +171,7 @@ async fn main() {
         manifest: Default::default(),
         setup_code: Mutex::new(setup_code),
         offline_notified: Default::default(),
+        tls_pin,
     });
 
     let app = Router::new()
@@ -189,9 +213,13 @@ async fn main() {
         .fallback(static_file)
         .with_state(st);
 
-    let listener = tokio::net::TcpListener::bind(listen).await.expect("cannot bind");
-    println!("nextpane-server {VERSION} listening on {listen}");
-    axum::serve(listener, app).await.unwrap();
+    let scheme = if tls_cfg.is_some() { "https" } else { "http" };
+    println!("nextpane-server {VERSION} listening on {scheme}://{listen}");
+    match tls_cfg {
+        // shortcut: the certificate is read at start only; restart the panel after renewing it.
+        Some(c) => axum_server::bind_rustls(listen, axum_server::tls_rustls::RustlsConfig::from_config(c)).serve(app.into_make_service()).await.unwrap(),
+        None => axum::serve(tokio::net::TcpListener::bind(listen).await.expect("cannot bind"), app).await.unwrap(),
+    }
 }
 
 async fn install_sh(axum::extract::State(st): axum::extract::State<St>) -> Response {

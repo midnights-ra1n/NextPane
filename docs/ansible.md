@@ -56,6 +56,7 @@ the panel as soon as their agent connects.
 | `nextpane_state` | `present` | `present` installs/upgrades, `absent` uninstalls. |
 | `nextpane_server_url` | `""` | Panel WebSocket URL, `wss://<panel>/agent/ws`. Required. |
 | `nextpane_enroll_token` | `""` | Enrollment key (`npk_…`). Vault it. |
+| `nextpane_server_fingerprint` | `""` | Only when the panel uses its self-signed certificate: its sha256 (shown in *Add host* and in the panel logs). |
 | `nextpane_release_url` | `""` | Release base URL. Required. |
 | `nextpane_version` | `latest` | `latest` or a pinned version (`"0.2.0"`). |
 | `nextpane_install_method` | `auto` | `auto`, `package` or `binary`. |

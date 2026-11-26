@@ -2,6 +2,8 @@
 #
 #   Panel on port 3000 (plain HTTP, put your own reverse proxy in front for HTTPS):
 #     docker compose up -d
+#   Panel on port 3000 with its own HTTPS, reached by IP, no proxy at all:
+#     NEXTPANE_TLS=on docker compose up -d
 #   Panel + bundled Caddy (automatic HTTPS, needs ports 80/443 and PANEL_DOMAIN pointing here):
 #     PANEL_DOMAIN=panel.example.com NEXTPANE_PORT=127.0.0.1:3000 docker compose --profile caddy up -d
 #
@@ -13,6 +15,8 @@ services:
     restart: unless-stopped
     environment:
       NEXTPANE_RELEASE_URL: ${NEXTPANE_RELEASE_URL:-}
+      # "on" = HTTPS on port 3000 without any proxy (self-signed certificate, pinned by agents)
+      NEXTPANE_TLS: ${NEXTPANE_TLS:-}
     ports:
       # "3000" = every interface, "127.0.0.1:3000" = only a proxy on this host can reach it
       - "${NEXTPANE_PORT:-3000}:3000"
