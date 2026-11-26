@@ -76,6 +76,44 @@ pub fn ssh_keypair(comment: &str) -> (String, String) {
     )
 }
 
+fn take<'a>(r: &mut &'a [u8]) -> Option<&'a [u8]> {
+    let len = u32::from_be_bytes(r.get(..4)?.try_into().ok()?) as usize;
+    let d = r.get(4..4 + len)?;
+    *r = &r[4 + len..];
+    Some(d)
+}
+
+/// Checks a pasted OpenSSH private key and returns it re-wrapped (canonical PEM) with its public key line.
+pub fn import_ssh_key(pasted: &str) -> Result<(String, String), &'static str> {
+    const BEGIN: &str = "-----BEGIN OPENSSH PRIVATE KEY-----";
+    const END: &str = "-----END OPENSSH PRIVATE KEY-----";
+    if pasted.len() > 16 * 1024 {
+        return Err("key too large");
+    }
+    let body = pasted.trim().strip_prefix(BEGIN).and_then(|s| s.strip_suffix(END))
+        .ok_or("expected an OpenSSH private key (-----BEGIN OPENSSH PRIVATE KEY----- … -----END OPENSSH PRIVATE KEY-----)")?;
+    let raw = B64.decode(body.split_whitespace().collect::<String>()).map_err(|_| "invalid key encoding")?;
+    let mut r = raw.strip_prefix(b"openssh-key-v1\0".as_slice()).ok_or("not an OpenSSH private key")?;
+    let cipher = take(&mut r).ok_or("truncated key")?;
+    if cipher != b"none" {
+        return Err("this key is protected by a passphrase: NextPane needs it without one (ssh-keygen -p -N '' -f <key>)");
+    }
+    let (_kdf, _opts) = (take(&mut r).ok_or("truncated key")?, take(&mut r).ok_or("truncated key")?);
+    if r.get(..4) != Some(&1u32.to_be_bytes()[..]) {
+        return Err("expected exactly one key");
+    }
+    r = &r[4..];
+    let blob = take(&mut r).ok_or("truncated key")?;
+    let kind = std::str::from_utf8(take(&mut &blob[..]).ok_or("truncated key")?).map_err(|_| "invalid key type")?;
+    if !(kind == "ssh-ed25519" || kind == "ssh-rsa" || kind.starts_with("ecdsa-sha2-")) {
+        return Err("unsupported key type (use ed25519, RSA or ECDSA)");
+    }
+    take(&mut r).ok_or("truncated key")?; // the private section must be there
+    let b64 = B64.encode(&raw);
+    let lines: Vec<&str> = b64.as_bytes().chunks(70).map(|c| std::str::from_utf8(c).unwrap()).collect();
+    Ok((format!("{BEGIN}\n{}\n{END}\n", lines.join("\n")), format!("{kind} {} imported", B64.encode(blob))))
+}
+
 /// `SHA256:…` fingerprint of a public key line, as shown by ssh-keygen -l and Git providers.
 pub fn ssh_fingerprint(public: &str) -> String {
     let blob = public.split_whitespace().nth(1).and_then(|b| B64.decode(b).ok()).unwrap_or_default();
@@ -115,6 +153,22 @@ mod tests {
     use cbc::cipher::BlockDecryptMut;
 
     #[test]
+    fn import_ssh_key_roundtrip() {
+        let (private, public) = ssh_keypair("x");
+        // Pasted from a password manager: CRLF and one long base64 line.
+        let body: String = private.lines().filter(|l| !l.starts_with("-----")).collect();
+        let pasted = format!("-----BEGIN OPENSSH PRIVATE KEY-----\r\n{body}\r\n-----END OPENSSH PRIVATE KEY-----\r\n");
+        let (canon, pubkey) = import_ssh_key(&pasted).unwrap();
+        assert_eq!(canon, private);
+        assert_eq!(pubkey.split_whitespace().nth(1), public.split_whitespace().nth(1));
+        assert!(import_ssh_key("ssh-ed25519 AAAA me").is_err());
+        assert!(import_ssh_key("-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n-----END OPENSSH PRIVATE KEY-----").is_err());
+        let enc = B64.encode([b"openssh-key-v1\0".as_slice(), &[0, 0, 0, 10], b"aes256-ctr"].concat());
+        let e = import_ssh_key(&format!("-----BEGIN OPENSSH PRIVATE KEY-----\n{enc}\n-----END OPENSSH PRIVATE KEY-----")).unwrap_err();
+        assert!(e.contains("passphrase"));
+    }
+
+    #[test]
     fn ssh_keypair_is_valid_openssh() {
         let (private, public) = ssh_keypair("nextpane");
         assert!(private.starts_with("-----BEGIN OPENSSH PRIVATE KEY-----\n") && public.starts_with("ssh-ed25519 "));
@@ -133,6 +187,15 @@ mod tests {
             let l = std::process::Command::new("ssh-keygen").arg("-l").arg("-f").arg(&pubpath).output().unwrap();
             let _ = fs::remove_file(&pubpath);
             assert_eq!(String::from_utf8_lossy(&l.stdout).split_whitespace().nth(1), Some(ssh_fingerprint(&public).as_str()));
+            for kind in ["ed25519", "rsa", "ecdsa"] {
+                let p = std::env::temp_dir().join(format!("np-test-{}", token()));
+                let ok = std::process::Command::new("ssh-keygen").args(["-q", "-t", kind, "-N", "", "-C", "me@laptop", "-f"]).arg(&p).status().unwrap().success();
+                let (private, pubfile) = (fs::read_to_string(&p).unwrap_or_default(), fs::read_to_string(p.with_extension("pub")).unwrap_or_default());
+                let _ = (fs::remove_file(&p), fs::remove_file(p.with_extension("pub")));
+                assert!(ok);
+                let (_, imported) = import_ssh_key(&private).unwrap();
+                assert_eq!(imported.split_whitespace().take(2).collect::<Vec<_>>(), pubfile.split_whitespace().take(2).collect::<Vec<_>>(), "{kind}");
+            }
         }
     }
 

@@ -9,7 +9,7 @@ mod update;
 use futures_util::{SinkExt, StreamExt};
 use nextpane_proto::{AgentMsg, AppSpec, HostInfo, ServerMsg};
 use std::{fs, io::Write, os::unix::fs::OpenOptionsExt, process::Command, time::{Duration, Instant}};
-use tokio::{sync::mpsc, task::spawn_blocking, time::interval};
+use tokio::{sync::mpsc, task::spawn_blocking, time::{interval, interval_at}};
 use tokio_tungstenite::{connect_async_tls_with_config, tungstenite::{client::IntoClientRequest, Message}, Connector, MaybeTlsStream};
 
 /// Root-only agent state (host secret, firewall state, update downloads).
@@ -85,7 +85,8 @@ async fn session(server: &str) -> Result<(), Error> {
     let mut collector = metrics::Collector::default();
     let mut disk_at = Instant::now() - Duration::from_secs(3600);
     let mut metrics_tick = interval(Duration::from_secs(10));
-    let mut poll_tick = interval(Duration::from_secs(60));
+    // Not right after connecting: an agent update may still be finishing (rpm reloads systemd at the end).
+    let mut poll_tick = interval_at(tokio::time::Instant::now() + Duration::from_secs(60), Duration::from_secs(60));
     let mut ping = interval(Duration::from_secs(30));
     let mut last_rx = Instant::now();
 
@@ -104,7 +105,8 @@ async fn session(server: &str) -> Result<(), Error> {
                     Ok(ServerMsg::Sync { apps: a, ssh_keys, metrics_interval, poll_interval, git_key }) => {
                         apps = a;
                         metrics_tick = interval(Duration::from_secs(metrics_interval.max(2)));
-                        poll_tick = interval(Duration::from_secs(poll_interval.max(15)));
+                        let every = Duration::from_secs(poll_interval.max(15));
+                        poll_tick = interval_at(tokio::time::Instant::now() + every, every);
                         let a = apps.clone();
                         spawn_blocking(move || apps::sync(&a, &ssh_keys, git_key.as_deref()));
                     }

@@ -38,7 +38,8 @@ Inside the agent, every filesystem write under `/var/lib/nextpane` (owned by `ne
   sent to every agent over the WebSocket (`/var/lib/nextpane/.ssh/nextpane_git`, 0600). A host that is
   compromised can read every repository that key opens: add it to a dedicated Git account with
   read-only access rather than to your personal account (which can also push). *Rotate key* replaces it
-  everywhere at once.
+  everywhere at once. *Use my own key* imports an existing private key instead (OpenSSH format, no
+  passphrase, audit-logged by fingerprint, never displayed again): every host then holds that key.
 - **App keys** (optional) are generated on the host; the private key never transits.
 - The audit log records enrollments, deployments, env changes (keys only, never values), exports,
   SSH keys, deletions and updates.

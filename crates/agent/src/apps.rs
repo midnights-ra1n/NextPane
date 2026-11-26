@@ -290,18 +290,30 @@ fn install_unit(log: &mut String, spec: &AppSpec, dir: &Path) -> Result<(), Stri
 /// and accounted outside the agent's own cgroup.
 fn build_step(log: &mut String, spec: &AppSpec, rel: &Path, cmd: &str) -> Result<(), String> {
     log.push_str(&format!("\n$ {cmd}\n"));
-    let mut c = Cmd::new("systemd-run");
-    c.args(["--wait", "--pipe", "--collect", "--quiet"])
-        .arg(format!("--unit=nextpane-build-{}", spec.name))
-        .arg(format!("--uid={USER}"))
-        .arg(format!("--gid={USER}"))
-        .args(["-p", &format!("WorkingDirectory={}", rel.display())])
-        .args(["-p", &format!("EnvironmentFile=-{}", env_path(&spec.name))])
-        .args(["-E", &format!("HOME={HOME}"), "-E", &format!("PATH={}", path_var())]);
-    for l in limits(spec) {
-        c.args(["-p", &l]);
+    for attempt in 1.. {
+        let mut c = Cmd::new("systemd-run");
+        c.args(["--wait", "--pipe", "--collect", "--quiet"])
+            .arg(format!("--unit=nextpane-build-{}", spec.name))
+            .arg(format!("--uid={USER}"))
+            .arg(format!("--gid={USER}"))
+            .args(["-p", &format!("WorkingDirectory={}", rel.display())])
+            .args(["-p", &format!("EnvironmentFile=-{}", env_path(&spec.name))])
+            .args(["-E", &format!("HOME={HOME}"), "-E", &format!("PATH={}", path_var())]);
+        for l in limits(spec) {
+            c.args(["-p", &l]);
+        }
+        let mut out = String::new();
+        let r = run(&mut out, c.args(["/bin/sh", "-c", cmd])).map(|_| ());
+        log.push_str(&out);
+        // The unit never started (e.g. systemd was reloading during a package update): safe to retry.
+        if r.is_err() && out.contains("Failed to start transient service unit") && attempt < 4 {
+            log.push_str("systemd was busy, retrying in 5s\n");
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            continue;
+        }
+        return r;
     }
-    run(log, c.args(["/bin/sh", "-c", cmd])).map(|_| ())
+    unreachable!()
 }
 
 fn deploy(log: &mut String, spec: &AppSpec, env: &[EnvVar], want: Option<&str>) -> Result<String, String> {

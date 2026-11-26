@@ -178,14 +178,18 @@ pub(crate) fn load_git_key(db: &rusqlite::Connection, key: &[u8; 32]) -> Option<
     Some((v["public"].as_str()?.to_string(), crypto::open(key, v["private"].as_str()?)?))
 }
 
-/// One SSH key for every app on every host: generated here on first use, sent to the agents.
+/// One SSH key for every app on every host: generated here (or imported), sent to the agents.
 fn new_git_key(st: &St, action: &str) -> R {
     let (private, public) = crypto::ssh_keypair("nextpane-deploy");
+    store_git_key(st, action, private, public)
+}
+
+fn store_git_key(st: &St, action: &str, private: String, public: String) -> R {
     {
         let db = st.db.lock().unwrap();
         let v = json!({ "public": public, "private": crypto::seal(&st.key, &private) }).to_string();
         db.execute("INSERT INTO settings (key, value) VALUES ('git_key', ?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [v])?;
-        audit(&db, action, &public);
+        audit(&db, action, &crypto::ssh_fingerprint(&public));
     }
     hub::resync_all(st);
     Ok(Json(json!({ "public": public, "fingerprint": crypto::ssh_fingerprint(&public) })))
@@ -201,6 +205,17 @@ pub async fn get_git_key(State(st): State<St>, _: User) -> R {
 
 pub async fn rotate_git_key(State(st): State<St>, _: User) -> R {
     new_git_key(&st, "git_key.rotate")
+}
+
+#[derive(Deserialize)]
+pub struct ImportKey {
+    private_key: String,
+}
+
+/// Use an existing key (e.g. from a password manager) instead of the generated one.
+pub async fn import_git_key(State(st): State<St>, _: User, Json(k): Json<ImportKey>) -> R {
+    let (private, public) = crypto::import_ssh_key(&k.private_key).map_err(bad)?;
+    store_git_key(&st, "git_key.import", private, public)
 }
 
 /// Key library: public keys saved once and added to any host in one click.
@@ -394,8 +409,8 @@ Update it (Hosts > Update agent), then deploy again.\n", crate::VERSION);
     let fp = load_git_key(&st.db.lock().unwrap(), &st.key).map(|k| crypto::ssh_fingerprint(&k.0)).unwrap_or_default();
     format!("\nhint: the host cannot read this repository. Add the NextPane deploy key (Settings > Deploy key, fingerprint {fp}) \
 once to a Git account that can read it, as an Authentication key (GitHub: Settings > SSH and GPG keys, which lists each key's fingerprint; \
-GitLab: Preferences > SSH Keys; Gitea/Forgejo: Settings > SSH / GPG Keys). Never paste a private key into NextPane. \
-Keys in the host's \"SSH keys\" tab only allow logging into the host, git does not use them.\n")
+GitLab: Preferences > SSH Keys; Gitea/Forgejo: Settings > SSH / GPG Keys), or import a key your Git account already \
+has (Settings > Deploy key > Use my own key). Keys in the host's \"SSH keys\" tab only allow logging into the host, git does not use them.\n")
 }
 
 /// Auto-deploy: the agent reports the branch head; deploy when it moved.

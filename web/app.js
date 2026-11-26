@@ -1021,7 +1021,20 @@ async function settingsPage() {
   const rotate = h('button', { class: 'btn', type: 'button', onclick: async () => {
     if (await confirmDialog('Rotate deploy key', 'Creates a new key and sends it to every host. The current key stops working for NextPane: replace it in your Git accounts, then delete the old one there.', 'Rotate'))
       act(rotate, () => api('/api/git-key/rotate', { method: 'POST' }).then(render), 'New deploy key sent to the hosts');
-  } }, 'Rotate key');
+  } }, gitKey.public.endsWith(' imported') ? 'Generate a new key' : 'Rotate key');
+  const importKey = h('button', { class: 'btn', type: 'button', onclick: () => {
+    const ta = h('textarea', { class: 'mono', rows: 8, autocomplete: 'off', spellcheck: false, placeholder: '-----BEGIN OPENSSH PRIVATE KEY-----\n…\n-----END OPENSSH PRIVATE KEY-----' });
+    const save = h('button', { class: 'btn primary', type: 'button', onclick: () => act(save, async () => {
+      await api('/api/git-key', { method: 'PUT', body: { private_key: ta.value } });
+      ta.value = '';
+      d.close();
+      render();
+    }, 'Key imported and sent to the hosts') }, 'Use this key');
+    const d = modal('Use my own key', h('div', { class: 'stack' },
+      h('p', { class: 'muted' }, 'Paste the private key of an SSH key your Git accounts already know (e.g. from your password manager), in OpenSSH format and without a passphrase. It replaces the current deploy key on every host.'),
+      h('p', { class: 'muted small' }, 'It is stored encrypted and copied to every host: anyone who takes over a host gets it, with every right it has on your Git accounts. Never shown again by NextPane.'),
+      field('Private key', ta)), save, 'wide');
+  } }, 'Use my own key');
   const libName = h('input', { placeholder: 'laptop' });
   const libKey = h('textarea', { class: 'mono', placeholder: 'ssh-ed25519 AAAA… you@laptop', rows: 3 });
   const libAdd = h('button', { class: 'btn primary', type: 'button', onclick: () => act(libAdd, () => api('/api/ssh-keys', { method: 'POST', body: { name: libName.value, pubkey: libKey.value } }).then(render), 'Key saved') }, 'Save key');
@@ -1078,9 +1091,9 @@ async function settingsPage() {
           if (await confirmDialog('Revoke key', `Revoke “${k.name}”? New hosts can no longer enroll with it.`, 'Revoke')) act(b, () => api(`/api/enroll-keys/${k.id}`, { method: 'DELETE' }).then(render));
         } }, 'Revoke')))))) : h('div', { class: 's-body muted' }, 'No active keys.')),
     section('Deploy key', 'One SSH key for every app on every host. Add this public key once to your Git account (GitHub: Settings › SSH and GPG keys; GitLab: Preferences › SSH Keys; Gitea/Forgejo: Settings › SSH / GPG Keys), then use SSH clone URLs (git@…).',
-      h('div', { class: 'stack' }, code(gitKey.public), h('p', { class: 'mono small dim' }, `Fingerprint ${gitKey.fingerprint}: compare with the list of keys on GitHub.`),
+      h('div', { class: 'stack' }, code(gitKey.public), h('p', { class: 'mono small dim' }, `Fingerprint ${gitKey.fingerprint}${gitKey.public.endsWith(' imported') ? ' · imported key' : ''}: compare with the list of keys on GitHub.`),
         h('p', { class: 'muted small' }, 'Every host holds the private key, and on a personal account the key can also push to your repositories. Safer: a dedicated Git account with read-only access to the repositories you deploy.')),
-      [h('span', { class: 'dim small' }, 'An app can still use its own key (app Settings).'), rotate]),
+      [h('span', { class: 'dim small' }, 'An app can still use its own key (app Settings).'), h('div', { class: 'row' }, importKey, rotate)]),
     h('div', { class: 'section' }, h('div', { class: 's-head' }, h('div', {}, h('h2', {}, 'SSH key library'), h('p', { class: 'muted small' }, 'Public keys saved once, then added to any host from its SSH keys tab. Forgetting a key here does not remove it from hosts.'))),
       library.length ? h('table', {}, h('tbody', {}, library.map((k) => h('tr', {}, h('td', {}, h('strong', {}, k.name || 'key')), h('td', { class: 'mono small muted' }, k.pubkey.slice(0, 60) + '…'),
         h('td', { class: 'num' }, h('button', { class: 'btn sm', onclick: async (e) => {
